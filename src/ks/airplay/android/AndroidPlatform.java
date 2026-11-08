@@ -4,6 +4,7 @@ package ks.airplay.android;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioTimestamp;
 import android.media.AudioTrack;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
@@ -30,73 +31,107 @@ public final class AndroidPlatform implements Platform {
 
     @Override
     public AudioSink openSink(int sampleRate, int channels) {
-        int mask = channels == 1 ? AudioFormat.CHANNEL_OUT_MONO : AudioFormat.CHANNEL_OUT_STEREO;
-        int min = AudioTrack.getMinBufferSize(sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT);
-        // About 200 ms of device buffer: the jitter buffer upstream absorbs network delay.
-        int size = Math.max(min * 2, sampleRate * channels * 2 / 5);
-        AudioAttributes attributes = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build();
-        AudioFormat format = new AudioFormat.Builder()
-                .setSampleRate(sampleRate)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(mask)
-                .build();
-        final AudioTrack track = new AudioTrack(attributes, format, size, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE);
-        if (track.getState() != AudioTrack.STATE_INITIALIZED) {
-            track.release();
-            throw new IllegalStateException("AudioTrack failed to initialize");
+        return new Sink(sampleRate, channels, logger);
+    }
+
+    /**
+     * AudioTrack output that knows when written audio will play: AudioTrack.getTimestamp pairs a frame position
+     * with the CLOCK_MONOTONIC time it reached the speaker, which is the clock System.nanoTime() reads.
+     */
+    static final class Sink implements AudioSink {
+        private final int rate, channels;
+        private final Logger logger;
+        private final AudioTimestamp stamp = new AudioTimestamp();
+        private AudioTrack track;
+        private long written; // frames since the track was created
+        private float gain = 1f;
+        private volatile boolean closed;
+
+        Sink(int rate, int channels, Logger logger) {
+            this.rate = rate;
+            this.channels = channels;
+            this.logger = logger;
+            track = create();
         }
-        track.play();
-        return new AudioSink() {
-            private volatile boolean closed;
 
-            @Override public boolean write(short[] samples, int offset, int length) {
-                int done = 0;
-                while (done < length) {
-                    if (closed) return false;
-                    int n = track.write(samples, offset + done, length - done);
-                    if (n < 0) {
-                        logger.log("AudioTrack write failed: " + n);
-                        return false;
-                    }
-                    if (n == 0) {
-                        // Paused by a flush: resume.
-                        if (track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) track.play();
-                        else return true;
-                    }
-                    done += n;
+        private AudioTrack create() {
+            int mask = channels == 1 ? AudioFormat.CHANNEL_OUT_MONO : AudioFormat.CHANNEL_OUT_STEREO;
+            int min = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT);
+            // About 100 ms: small enough that timing corrections take effect quickly.
+            int size = Math.max(min * 2, rate * channels * 2 / 10);
+            AudioAttributes attributes = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build();
+            AudioFormat format = new AudioFormat.Builder()
+                    .setSampleRate(rate)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(mask)
+                    .build();
+            AudioTrack t = new AudioTrack(attributes, format, size, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE);
+            if (t.getState() != AudioTrack.STATE_INITIALIZED) {
+                t.release();
+                throw new IllegalStateException("AudioTrack failed to initialize");
+            }
+            t.setVolume(gain);
+            t.play();
+            written = 0;
+            return t;
+        }
+
+        @Override public synchronized boolean write(short[] samples, int offset, int length) {
+            int done = 0;
+            while (done < length) {
+                if (closed) return false;
+                int n = track.write(samples, offset + done, length - done);
+                if (n < 0) {
+                    logger.log("AudioTrack write failed: " + n);
+                    return false;
                 }
-                return true;
+                if (n == 0) return true;
+                done += n;
             }
+            written += length / channels;
+            return true;
+        }
 
-            @Override public void setGain(float gain) {
-                if (!closed) track.setVolume(gain);
+        @Override public synchronized long nextPlayTime() {
+            long now = System.nanoTime();
+            if (track.getTimestamp(stamp) && stamp.nanoTime > 0 && now - stamp.nanoTime < 1_000_000_000L) {
+                return stamp.nanoTime + (written - stamp.framePosition) * 1_000_000_000L / rate;
             }
+            // Before the first timestamp: count what is still queued, plus a typical output latency.
+            long head = track.getPlaybackHeadPosition() & 0xffffffffL;
+            return now + Math.max(0, written - head) * 1_000_000_000L / rate + 40_000_000L;
+        }
 
-            @Override public void flush() {
-                if (closed) return;
-                try {
-                    track.pause();
-                    track.flush();
-                    track.play();
-                } catch (IllegalStateException ignored) {
-                }
-            }
+        @Override public synchronized void setGain(float g) {
+            gain = g;
+            if (!closed) track.setVolume(g);
+        }
 
-            @Override public void close() {
-                if (closed) return;
-                closed = true;
-                try {
-                    track.pause();
-                    track.flush();
-                    track.stop();
-                } catch (IllegalStateException ignored) {
-                }
-                track.release();
+        /** Start over with an empty track, so frame positions and timestamps begin again. */
+        @Override public synchronized void flush() {
+            if (closed) return;
+            release(track);
+            track = create();
+        }
+
+        @Override public synchronized void close() {
+            if (closed) return;
+            closed = true;
+            release(track);
+        }
+
+        private static void release(AudioTrack t) {
+            try {
+                t.pause();
+                t.flush();
+                t.stop();
+            } catch (IllegalStateException ignored) {
             }
-        };
+            t.release();
+        }
     }
 
     @Override
@@ -110,7 +145,7 @@ public final class AndroidPlatform implements Platform {
                 @Override public void close() {}
             };
         }
-        if (ct == 4 || ct == 8) return new AacDecoder(ct == 8);
+        if (ct == 4) return new AacDecoder(false);
         throw new IllegalArgumentException("Unsupported AirPlay audio compression type " + ct);
     }
 

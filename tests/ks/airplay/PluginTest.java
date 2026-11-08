@@ -56,14 +56,12 @@ public final class PluginTest {
     }
 
     public static void main(String[] args) throws Exception {
-        TestSupport.loadTables();
         FakeHost host = new FakeHost();
         AirPlayPlugin plugin = new AirPlayPlugin(new FlowTest.FakePlatform());
         Map<String, Object> settings = new LinkedHashMap<>();
         settings.put("name", "");
         settings.put("port", String.valueOf(PORT));
         settings.put("deviceId", "");
-        settings.put("bufferMs", 500.0);
         long t0 = System.nanoTime();
         plugin.start(host, settings);
         TestSupport.check(System.nanoTime() - t0 < 3_000_000_000L, "start returns within the callback deadline");

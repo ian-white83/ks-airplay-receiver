@@ -2,10 +2,8 @@
 package ks.airplay;
 
 import java.security.MessageDigest;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -13,40 +11,39 @@ import ks.airplay.crypto.Ed25519;
 
 /** Everything the receiver advertises: name, identity, feature bits and the TXT records built from them. */
 public final class AirPlayConfig {
-    public static final String SOURCE_VERSION = "220.68";
-    public static final String MODEL = "AppleTV3,2";
+    public static final String SOURCE_VERSION = "366.0";
+    public static final String FIRMWARE = "ks-airplay-0.2";
+    public static final String MODEL = "KSAirPlay1,1";
 
     /**
-     * Features advertised by default: UxPlay's set (0x5A7FFEE6) without screen mirroring, video, photos or
-     * slideshows (bits 1, 2, 5, 6, 7 and 13), and with bit 27 "supports legacy pairing" off, so senders skip
-     * pair-setup and start faster. Bit 9 (audio), 11 (audio redundancy), 14 and 22 (FairPlay), 15-17 (artwork,
-     * progress and text metadata), 18-21 (audio formats) and 30 (RAOP) stay on.
+     * shairport-sync's AirPlay 2 feature set: audio, buffered audio (bit 40), PTP (41), HomeKit pairing (46, 47,
+     * 48), unified media control (38) and classic metadata (15-17: artwork, progress, text).
      */
-    public static final long DEFAULT_FEATURES = 0x527FDE00L;
-    public static final long LEGACY_PAIRING_BIT = 1L << 27;
+    public static final long DEFAULT_FEATURES = 0x0001C340401FCA00L;
+    /** bufferStream formats: AAC-LC 44.1 kHz stereo and ALAC 44.1 kHz 16-bit stereo. */
+    public static final long BUFFER_FORMATS = 0x400000L | 0x40000L;
 
     public final String name;
     public final byte[] deviceId; // 6 bytes, shown like a MAC address
     public final int port;
     public final long features;
-    public final int bufferMs;
     final byte[] seed;
     public final byte[] publicKey;
-    public final String pi;
+    public final String pi, psi;
 
-    public AirPlayConfig(String name, String deviceId, int port, long features, boolean legacyPairing, int bufferMs) {
+    public AirPlayConfig(String name, String deviceId, int port, long features) {
         this.name = name == null || name.trim().isEmpty() ? "Kiosk Satellite" : name.trim();
         this.deviceId = parseDeviceId(deviceId);
         this.port = port;
-        long f = features;
-        f = legacyPairing ? f | LEGACY_PAIRING_BIT : f & ~LEGACY_PAIRING_BIT;
-        this.features = f;
-        this.bufferMs = bufferMs;
+        this.features = features;
         byte[] digest = sha512(("ks-airplay identity " + deviceIdString()).getBytes(Util.UTF8));
         this.seed = Arrays.copyOf(digest, 32);
         this.publicKey = Ed25519.publicKey(seed);
         this.pi = UUID.nameUUIDFromBytes(("ks-airplay pi " + deviceIdString()).getBytes(Util.UTF8)).toString();
+        this.psi = UUID.nameUUIDFromBytes(("ks-airplay psi " + deviceIdString()).getBytes(Util.UTF8)).toString().toUpperCase(java.util.Locale.ROOT);
     }
+
+    public byte[] seed() { return seed.clone(); }
 
     /** A random locally administered unicast address, such as 02:1A:2B:3C:4D:5E. */
     public static String randomDeviceId(java.util.Random random) {
@@ -79,7 +76,7 @@ public final class AirPlayConfig {
     /** The _raop._tcp instance name: the device ID without separators, then @ and the speaker name. */
     public String raopServiceName() { return format(deviceId, "") + "@" + name; }
 
-    /** Parse "0x527FDE00" or "0x5A7FFEE6,0x0" (low word, high word) as AirPlay writes features. */
+    /** Parse "0x401FCA00,0x1C340" (low word, high word) as AirPlay writes features. */
     public static long parseFeatures(String text, long fallback) {
         if (text == null || text.trim().isEmpty()) return fallback;
         try {
@@ -93,90 +90,96 @@ public final class AirPlayConfig {
     }
 
     public String featuresString() {
-        long high = features >>> 32, low = features & 0xffffffffL;
-        return high == 0 ? String.format("0x%X", low) : String.format("0x%X,0x%X", low, high);
+        return String.format("0x%X,0x%X", features & 0xffffffffL, features >>> 32);
+    }
+
+    /** Features as eight little-endian bytes in unpadded base64, the "fex" field. */
+    public String featuresEx() {
+        byte[] b = new byte[8];
+        for (int i = 0; i < 8; i++) b[i] = (byte) (features >>> (8 * i));
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 8; i += 3) {
+            int n = (b[i] & 0xff) << 16 | (i + 1 < 8 ? (b[i + 1] & 0xff) << 8 : 0) | (i + 2 < 8 ? b[i + 2] & 0xff : 0);
+            int chars = i + 2 < 8 ? 4 : i + 1 < 8 ? 3 : 2;
+            for (int k = 0; k < chars; k++) sb.append(alphabet.charAt((n >> (18 - 6 * k)) & 63));
+        }
+        return sb.toString();
     }
 
     public Map<String, String> raopTxt() {
         Map<String, String> txt = new LinkedHashMap<>();
-        txt.put("txtvers", "1");
-        txt.put("ch", "2");
-        txt.put("cn", "0,1,2,3");
+        txt.put("cn", "0,1");
         txt.put("da", "true");
-        txt.put("et", "0,3,5");
-        txt.put("vv", "2");
+        txt.put("et", "0,1");
         txt.put("ft", featuresString());
-        txt.put("am", MODEL);
-        txt.put("md", "0,1,2");
-        txt.put("rhd", "5.6.0.0");
-        txt.put("pw", "false");
-        txt.put("sr", "44100");
-        txt.put("ss", "16");
-        txt.put("sv", "false");
-        txt.put("tp", "UDP");
+        txt.put("fv", FIRMWARE);
         txt.put("sf", "0x4");
-        txt.put("vs", SOURCE_VERSION);
-        txt.put("vn", "65537");
+        txt.put("md", "0,1,2");
+        txt.put("am", MODEL);
         txt.put("pk", Util.hex(publicKey));
+        txt.put("tp", "UDP");
+        txt.put("vn", "65537");
+        txt.put("vs", SOURCE_VERSION);
         return txt;
     }
 
-    public Map<String, String> airplayTxt() {
+    /** gid and gcgl follow the group the current sender put this receiver in. */
+    public Map<String, String> airplayTxt(String groupId, boolean groupContainsLeader) {
         Map<String, String> txt = new LinkedHashMap<>();
+        txt.put("acl", "0");
         txt.put("deviceid", deviceIdString());
+        txt.put("fex", featuresEx());
         txt.put("features", featuresString());
         txt.put("flags", "0x4");
+        txt.put("gid", groupId == null ? pi : groupId);
+        txt.put("igl", "0");
+        txt.put("gcgl", groupContainsLeader ? "1" : "0");
         txt.put("model", MODEL);
-        txt.put("pk", Util.hex(publicKey));
+        txt.put("protovers", "1.1");
         txt.put("pi", pi);
+        txt.put("psi", psi);
+        txt.put("pk", Util.hex(publicKey));
         txt.put("srcvers", SOURCE_VERSION);
-        txt.put("vv", "2");
-        txt.put("pw", "false");
+        txt.put("fv", FIRMWARE);
         return txt;
     }
 
-    /** The GET /info plist. A request that names a qualifier only gets that TXT record back. */
-    public Map<String, Object> info(String qualifier, boolean full, double initialVolume) {
+    /** The GET /info plist. A request that names the txtAirPlay qualifier gets that TXT record back. */
+    public Map<String, Object> info(String qualifier, String senderAddress, double initialVolume, String groupId, boolean gcgl) {
         Map<String, Object> info = new LinkedHashMap<>();
         if ("txtAirPlay".equals(qualifier)) {
-            info.put("txtAirPlay", Util.txtRecord(airplayTxt()));
+            info.put("txtAirPlay", Util.txtRecord(airplayTxt(groupId, gcgl)));
             return info;
         }
-        if ("txtRAOP".equals(qualifier)) {
-            info.put("txtRAOP", Util.txtRecord(raopTxt()));
-            return info;
-        }
-        info.put("deviceID", deviceIdString());
-        info.put("macAddress", deviceIdString());
-        info.put("pk", publicKey.clone());
+        Map<String, Object> playback = new LinkedHashMap<>();
+        playback.put("supportsInterstitials", Boolean.FALSE);
+        playback.put("supportsFPSSecureStop", Boolean.FALSE);
+        playback.put("supportsUIForAudioOnlyContent", Boolean.FALSE);
+        info.put("playbackCapabilities", playback);
+        info.put("canRecordScreenStream", Boolean.FALSE);
+        info.put("keepAliveSendStatsAsBody", Boolean.FALSE);
+        info.put("protocolVersion", "1.1");
+        info.put("screenDemoMode", Boolean.FALSE);
+        info.put("receiverHDRCapability", "4k60");
+        info.put("psi", psi);
+        info.put("featuresEx", featuresEx());
         info.put("features", features);
-        info.put("name", name);
+        info.put("statusFlags", 4L);
+        info.put("deviceID", deviceIdString());
         info.put("pi", pi);
-        info.put("vv", 2L);
-        info.put("statusFlags", 68L);
-        info.put("keepAliveLowPower", Boolean.TRUE);
-        info.put("sourceVersion", SOURCE_VERSION);
-        info.put("keepAliveSendStatsAsBody", Boolean.TRUE);
+        info.put("name", name);
         info.put("model", MODEL);
-        if (!full) return info;
+        info.put("pk", publicKey.clone());
+        if (senderAddress != null) info.put("senderAddress", senderAddress);
         info.put("initialVolume", initialVolume);
-        List<Object> latencies = new ArrayList<>();
-        List<Object> formats = new ArrayList<>();
-        for (long type : new long[] {100, 101}) {
-            Map<String, Object> latency = new LinkedHashMap<>();
-            latency.put("type", type);
-            latency.put("audioType", "default");
-            latency.put("inputLatencyMicros", 0L);
-            latency.put("outputLatencyMicros", Boolean.FALSE);
-            latencies.add(latency);
-            Map<String, Object> format = new LinkedHashMap<>();
-            format.put("type", type);
-            format.put("audioInputFormats", 0x3fffffcL);
-            format.put("audioOutputFormats", 0x3fffffcL);
-            formats.add(format);
-        }
-        info.put("audioLatencies", latencies);
-        info.put("audioFormats", formats);
+        info.put("vv", 0L);
+        info.put("volumeControlType", 3L);
+        info.put("sourceVersion", SOURCE_VERSION);
+        Map<String, Object> formats = new LinkedHashMap<>();
+        formats.put("audioStream", 262144L);
+        formats.put("bufferStream", BUFFER_FORMATS);
+        info.put("supportedFormats", formats);
         return info;
     }
 
@@ -192,6 +195,6 @@ public final class AirPlayConfig {
 
     public boolean sameAs(AirPlayConfig other) {
         return other != null && name.equals(other.name) && Arrays.equals(deviceId, other.deviceId) && port == other.port
-                && features == other.features && bufferMs == other.bufferMs;
+                && features == other.features;
     }
 }

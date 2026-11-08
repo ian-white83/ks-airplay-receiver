@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package ks.airplay;
 
-import java.io.FileInputStream;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
@@ -11,7 +9,6 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
-import ks.airplay.fairplay.FairPlayTables;
 
 final class TestSupport {
     private TestSupport() {}
@@ -22,13 +19,6 @@ final class TestSupport {
 
     static void check(boolean condition, String what) {
         if (!condition) throw new AssertionError("Failed: " + what);
-    }
-
-    static void loadTables() throws Exception {
-        if (FairPlayTables.loaded()) return;
-        try (InputStream in = new FileInputStream(root().resolve("assets/fairplay.bin").toFile())) {
-            FairPlayTables.load(in);
-        }
     }
 
     static final class AlacFixture {

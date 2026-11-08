@@ -6,36 +6,48 @@ import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 import ks.airplay.fairplay.FairPlay;
+import ks.airplay.hap.HapChannel;
+import ks.airplay.hap.HapPairing;
 
 /**
- * One sender's RTSP control connection. AirPlay 2 senders (iOS, macOS) use GET /info, fp-setup and two binary
- * plist SETUPs. AirPlay 1 senders use ANNOUNCE with SDP and a Transport header SETUP. Both end in a realtime
- * audio stream handled by {@link AudioSession}.
+ * One sender's AirPlay 2 control connection: /info, HomeKit transient pairing, then (encrypted) the PTP session
+ * SETUP, the buffered audio stream SETUP, SETRATEANCHORTIME, FLUSHBUFFERED, volume and metadata.
  */
 final class RtspConnection implements Runnable {
     private final AirPlayServer server;
     private final Socket socket;
     private final AirPlayConfig config;
     private final Platform platform;
+    private final HapPairing pairing;
     private final FairPlay fairPlay = new FairPlay();
-    private final Pairing pairing;
 
-    private byte[] streamKey; // decrypted AES key, salted with the pairing secret when there is one
-    private byte[] streamIv;
-    private boolean encrypted = true;
-    private volatile AudioSession audio;
+    private InputStream in;
+    private OutputStream out;
+    private InputStream rawIn;
+    private OutputStream rawOut;
+    private byte[] pendingSecret;
+
+    private volatile BufferedSession session;
+    private ServerSocket eventServer;
+    private Thread eventThread;
     private String clientName = "AirPlay sender";
-    private int announcedCt = -1, announcedSpf = 352;
-    private int remoteTimingPort;
+    private String groupId;
+    private boolean groupContainsLeader;
     private volatile boolean closed;
 
     RtspConnection(AirPlayServer server, Socket socket, AirPlayConfig config, Platform platform) {
@@ -43,17 +55,20 @@ final class RtspConnection implements Runnable {
         this.socket = socket;
         this.config = config;
         this.platform = platform;
-        this.pairing = new Pairing(config.seed, config.publicKey);
+        this.pairing = new HapPairing(config.deviceIdString(), config.seed(), config.publicKey);
     }
 
     String clientName() { return clientName; }
+    BufferedSession session() { return session; }
 
     @Override
     public void run() {
         try {
             socket.setTcpNoDelay(true);
-            InputStream in = new BufferedInputStream(socket.getInputStream());
-            OutputStream out = new BufferedOutputStream(socket.getOutputStream());
+            rawIn = new BufferedInputStream(socket.getInputStream());
+            rawOut = new BufferedOutputStream(socket.getOutputStream());
+            in = rawIn;
+            out = rawOut;
             while (!closed) {
                 RtspMessage request = RtspMessage.read(in);
                 if (request == null) break;
@@ -65,6 +80,13 @@ final class RtspConnection implements Runnable {
                     response.status(500, "Internal Server Error");
                 }
                 response.write(out, request.protocol, request.header("CSeq"));
+                if (pendingSecret != null) {
+                    // Pairing finished with that response: everything after it is encrypted.
+                    byte[][] keys = HapPairing.controlKeys(pendingSecret);
+                    pendingSecret = null;
+                    in = new BufferedInputStream(new HapChannel.Reader(rawIn, keys[0]));
+                    out = new HapChannel.Writer(rawOut, keys[1]);
+                }
                 if (response.close) break;
             }
         } catch (SocketException e) {
@@ -80,23 +102,19 @@ final class RtspConnection implements Runnable {
     void close() {
         if (closed) return;
         closed = true;
-        stopAudio();
+        stopSession();
+        closeEvents();
         try {
             socket.close();
         } catch (IOException ignored) {
         }
     }
 
-    void stopAudio() {
-        AudioSession a = audio;
-        audio = null;
-        if (a != null) {
-            a.close();
-            server.audioStopped(this);
-        }
+    void stopSession() {
+        BufferedSession s = session;
+        session = null;
+        if (s != null) s.close();
     }
-
-    AudioSession audio() { return audio; }
 
     private void handle(RtspMessage req, RtspMessage.Response res) throws Exception {
         String method = req.method.toUpperCase(Locale.ROOT);
@@ -105,247 +123,177 @@ final class RtspConnection implements Runnable {
         if (query >= 0) path = path.substring(0, query);
 
         if (method.equals("GET") && path.equals("/info")) { info(req, res); return; }
-        if (method.equals("POST") && path.equals("/pair-setup")) {
-            res.body("application/octet-stream", pairing.setup(req.body));
-            return;
-        }
-        if (method.equals("POST") && path.equals("/pair-verify")) {
-            res.body("application/octet-stream", pairing.verify(req.body));
-            return;
-        }
-        if (method.equals("POST") && path.equals("/fp-setup")) {
-            byte[] reply = fairPlay.setup(req.body);
-            if (reply == null) {
-                res.status(501, "Not Implemented");
-                platform.log("Unsupported FairPlay request");
-            } else {
-                res.body("application/octet-stream", reply);
+        if (method.equals("POST")) {
+            if (path.equals("/pair-pin-start")) return;
+            if (path.equals("/pair-setup")) {
+                res.body("application/octet-stream", pairing.setup(req.body));
+                byte[] secret = pairing.sharedSecret();
+                if (secret != null && in == rawIn) pendingSecret = secret;
+                return;
             }
+            if (path.equals("/pair-verify")) {
+                res.body("application/octet-stream", pairing.verify(req.body));
+                return;
+            }
+            if (path.equals("/fp-setup")) {
+                byte[] reply = fairPlay.setup(req.body);
+                if (reply == null) res.status(501, "Not Implemented");
+                else res.body("application/octet-stream", reply);
+                return;
+            }
+            if (path.equals("/feedback") || path.equals("/audioMode") || path.equals("/command")
+                    || path.equals("/pair-add") || path.equals("/pair-remove") || path.equals("/configure")) {
+                return;
+            }
+            res.status(404, "Not Found");
             return;
         }
-        if (method.equals("POST") && (path.equals("/feedback") || path.equals("/audioMode") || path.equals("/command"))) return;
         if (method.equals("OPTIONS")) {
-            res.header("Public", "ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, POST, GET");
+            res.header("Public", "SETUP, RECORD, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, FLUSHBUFFERED, SETRATEANCHORTIME, SETPEERS, SETPEERSX, POST, GET");
             return;
         }
-        if (method.equals("ANNOUNCE")) { announce(req, res); return; }
-        if (method.equals("SETUP")) {
-            if (req.contentType().contains("x-apple-binary-plist")) setupPlist(req, res);
-            else setupTransport(req, res);
-            return;
-        }
-        if (method.equals("RECORD")) {
-            res.header("Audio-Latency", String.valueOf(config.bufferMs * AudioSession.SAMPLE_RATE / 1000));
-            res.header("Audio-Jack-Status", "connected; type=analog");
-            return;
-        }
-        if (method.equals("FLUSH")) {
-            AudioSession a = audio;
-            if (a != null) a.flush(rtpInfoSeq(req.header("RTP-Info")));
-            return;
-        }
+        if (method.equals("SETUP")) { setup(req, res); return; }
+        if (method.equals("RECORD")) return;
+        if (method.equals("SETRATEANCHORTIME")) { anchor(req); return; }
+        if (method.equals("FLUSHBUFFERED")) { flushBuffered(req); return; }
+        if (method.equals("SETPEERS") || method.equals("SETPEERSX")) return; // clocks are matched by the anchor's timeline ID
         if (method.equals("TEARDOWN")) { teardown(req, res); return; }
         if (method.equals("GET_PARAMETER")) { getParameter(req, res); return; }
         if (method.equals("SET_PARAMETER")) { setParameter(req); return; }
-        if (method.equals("SETPEERS") || method.equals("SETPEERSX") || method.equals("SETRATEANCHORTIME")) {
-            res.status(501, "Not Implemented"); // buffered audio and PTP are not supported
-            return;
-        }
-        res.status(404, "Not Found");
+        res.status(501, "Not Implemented"); // AirPlay 1 (ANNOUNCE, FLUSH, ...) is left to Kiosk Satellite's own receiver
     }
 
-    // ---------------------------------------------------------------- AirPlay 2
+    // ---------------------------------------------------------------- requests
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> plist(RtspMessage req) {
+        if (req.body.length == 0) return Collections.emptyMap();
+        try {
+            Object o = BPlist.parse(req.body);
+            return o instanceof Map ? (Map<String, Object>) o : Collections.<String, Object>emptyMap();
+        } catch (IOException e) {
+            platform.log("Unreadable plist in " + req.method + ": " + e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
 
     @SuppressWarnings("unchecked")
     private void info(RtspMessage req, RtspMessage.Response res) {
         String qualifier = null;
-        if (req.contentType().contains("x-apple-binary-plist") && req.body.length > 0) {
-            try {
-                Map<String, Object> root = (Map<String, Object>) BPlist.parse(req.body);
-                Object q = root.get("qualifier");
-                if (q instanceof List && !((List<Object>) q).isEmpty()) qualifier = String.valueOf(((List<Object>) q).get(0));
-            } catch (Exception e) {
-                platform.log("Unreadable /info request: " + e.getMessage());
-            }
-        }
-        boolean full = qualifier == null && req.header("CSeq") != null;
-        res.body("application/x-apple-binary-plist", BPlist.write(config.info(qualifier, full, server.volumeDb())));
+        Object q = plist(req).get("qualifier");
+        if (q instanceof List && !((List<Object>) q).isEmpty()) qualifier = String.valueOf(((List<Object>) q).get(0));
+        String sender = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
+        res.body("application/x-apple-binary-plist", BPlist.write(config.info(qualifier, sender, server.volumeDb(), groupId, groupContainsLeader)));
     }
 
     @SuppressWarnings("unchecked")
-    private void setupPlist(RtspMessage req, RtspMessage.Response res) throws Exception {
-        Map<String, Object> root = (Map<String, Object>) BPlist.parse(req.body);
+    private void setup(RtspMessage req, RtspMessage.Response res) throws Exception {
+        Map<String, Object> root = plist(req);
         Map<String, Object> reply = new LinkedHashMap<>();
-        byte[] ekey = BPlist.getData(root, "ekey");
-        byte[] eiv = BPlist.getData(root, "eiv");
-        if (ekey != null && eiv != null) {
-            if (ekey.length != 72 || eiv.length != 16) {
-                res.status(400, "Bad Request");
+        String name = BPlist.getString(root, "name");
+        if (name != null && !name.isEmpty()) clientName = name;
+        Object streams = root.get("streams");
+        if (!(streams instanceof List)) {
+            String timing = BPlist.getString(root, "timingProtocol");
+            if ("PTP".equals(timing)) {
+                String gid = BPlist.getString(root, "groupUUID");
+                if (gid != null) groupId = gid;
+                groupContainsLeader = BPlist.getBool(root, "groupContainsGroupLeader", false);
+                reply.put("eventPort", (long) openEvents());
+                reply.put("timingPort", 0L);
+                if (root.containsKey("timingPeerInfo")) {
+                    Map<String, Object> peer = new LinkedHashMap<>();
+                    peer.put("Addresses", localAddresses());
+                    peer.put("ID", socket.getLocalAddress().getHostAddress());
+                    reply.put("timingPeerInfo", peer);
+                }
+                server.sessionStarted(this);
+            } else if (BPlist.getBool(root, "isRemoteControlOnly", false)) {
+                reply.put("eventPort", (long) openEvents());
+            } else {
+                platform.log("Refused a session with timing protocol " + timing + ": only PTP (AirPlay 2 buffered audio) is supported");
+                res.status(501, "Not Implemented");
                 return;
             }
-            String name = BPlist.getString(root, "name");
-            if (name != null && !name.isEmpty()) clientName = name;
-            byte[] key = fairPlay.decryptKey(ekey);
-            byte[] secret = pairing.secret();
-            if (secret != null) key = java.util.Arrays.copyOf(AirPlayConfig.sha512(key, secret), 16);
-            streamKey = key;
-            streamIv = eiv.clone();
-            encrypted = true;
-            if (!"NTP".equals(BPlist.getString(root, "timingProtocol")) && root.containsKey("timingProtocol")) {
-                platform.log("Sender asked for timing protocol " + BPlist.getString(root, "timingProtocol") + "; only NTP is supported");
-            }
-            stopAudio();
-            remoteTimingPort = (int) BPlist.getLong(root, "timingPort", 0);
-            audio = newAudioSession();
-            server.sessionStarted(this);
-            reply.put("timingPort", (long) audio.timingPort());
-            reply.put("eventPort", 0L);
+            res.body("application/x-apple-binary-plist", BPlist.write(reply));
+            return;
         }
-        Object streams = root.get("streams");
-        if (streams instanceof List) {
-            List<Object> out = new ArrayList<>();
-            for (Object o : (List<Object>) streams) {
-                if (!(o instanceof Map)) continue;
-                Map<String, Object> stream = (Map<String, Object>) o;
-                long type = BPlist.getLong(stream, "type", 0);
-                if (type == 96) {
-                    if (audio == null && streamKey != null) {
-                        // Resuming after a pause: the sender tore down only the stream and keeps its keys.
-                        audio = newAudioSession();
-                    }
-                    AudioSession a = audio;
-                    if (a == null) {
-                        res.status(400, "Bad Request");
-                        return;
-                    }
-                    int ct = (int) BPlist.getLong(stream, "ct", 2);
-                    int spf = (int) BPlist.getLong(stream, "spf", 352);
-                    int controlPort = (int) BPlist.getLong(stream, "controlPort", 0);
-                    a.startAudio(ct, spf, controlPort);
-                    a.setVolume(server.volumeDb());
-                    server.streamStarted(this, ct);
-                    Map<String, Object> s = new LinkedHashMap<>();
-                    s.put("type", 96L);
-                    s.put("dataPort", (long) a.dataPort());
-                    s.put("controlPort", (long) a.controlPort());
-                    out.add(s);
-                } else {
-                    // 110 is screen mirroring, 103 buffered audio: neither is supported, so refuse the session.
-                    platform.log("Refused stream type " + type + " (only realtime audio is supported)");
+        List<Object> out = new ArrayList<>();
+        for (Object o : (List<Object>) streams) {
+            if (!(o instanceof Map)) continue;
+            Map<String, Object> stream = (Map<String, Object>) o;
+            long type = BPlist.getLong(stream, "type", 0);
+            if (type == 103) {
+                byte[] shk = BPlist.getData(stream, "shk");
+                int ct = (int) BPlist.getLong(stream, "ct", 4);
+                int spf = (int) BPlist.getLong(stream, "spf", ct == 2 ? 352 : 1024);
+                if (shk == null || shk.length != 32) {
+                    platform.log("Buffered stream without a 32-byte session key");
+                    res.status(400, "Bad Request");
+                    return;
+                }
+                if (ct != 2 && ct != 4) {
+                    platform.log("Unsupported buffered audio compression type " + ct);
                     res.status(501, "Not Implemented");
                     return;
                 }
+                stopSession();
+                BufferedSession s = new BufferedSession(platform, server.audioEvents(this), server.clock(), shk, ct, spf);
+                s.setVolume(server.volumeDb());
+                session = s;
+                server.streamStarted(this, ct);
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("type", 103L);
+                r.put("dataPort", (long) s.dataPort());
+                r.put("audioBufferSize", 8L * 1024 * 1024);
+                r.put("controlPort", 0L);
+                out.add(r);
+            } else if (type == 130) {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("streamID", 1L);
+                r.put("type", 130L);
+                out.add(r);
+            } else {
+                // 96 realtime audio and 110 mirroring are Kiosk Satellite's own receiver's job.
+                platform.log("Refused stream type " + type + ": this receiver plays AirPlay 2 buffered audio only");
+                res.status(501, "Not Implemented");
+                return;
             }
-            reply.put("streams", out);
         }
+        reply.put("streams", out);
         res.body("application/x-apple-binary-plist", BPlist.write(reply));
     }
 
-    private AudioSession newAudioSession() throws IOException {
-        AudioSession a = new AudioSession(platform, server.audioEvents(this), socket.getInetAddress(), streamKey, streamIv, config.bufferMs);
-        a.setRemoteTimingPort(remoteTimingPort);
-        return a;
+    private void anchor(RtspMessage req) {
+        Map<String, Object> p = plist(req);
+        BufferedSession s = session;
+        if (s == null) return;
+        if (p.containsKey("networkTimeSecs")) {
+            long secs = BPlist.getLong(p, "networkTimeSecs", 0);
+            long frac = BPlist.getLong(p, "networkTimeFrac", 0);
+            long nanos = secs * BufferedSession.NANOS + (((frac >>> 32) * BufferedSession.NANOS) >>> 32);
+            s.setAnchor(BPlist.getLong(p, "networkTimeTimelineID", 0), BPlist.getLong(p, "rtpTime", 0), nanos);
+        }
+        if (p.containsKey("rate")) s.setRate((int) BPlist.getLong(p, "rate", 0));
     }
 
-    @SuppressWarnings("unchecked")
+    private void flushBuffered(RtspMessage req) {
+        Map<String, Object> p = plist(req);
+        BufferedSession s = session;
+        if (s == null) return;
+        int from = p.containsKey("flushFromSeq") ? (int) BPlist.getLong(p, "flushFromSeq", 0) : -1;
+        s.flush(from, (int) BPlist.getLong(p, "flushUntilSeq", 0));
+    }
+
     private void teardown(RtspMessage req, RtspMessage.Response res) {
-        boolean audioOnly = false;
-        if (req.body.length > 0 && req.contentType().contains("x-apple-binary-plist")) {
-            try {
-                Map<String, Object> root = (Map<String, Object>) BPlist.parse(req.body);
-                Object streams = root.get("streams");
-                if (streams instanceof List && !((List<Object>) streams).isEmpty()) audioOnly = true;
-            } catch (Exception ignored) {
-            }
-        }
-        stopAudio();
-        if (!audioOnly) {
+        Object streams = plist(req).get("streams");
+        stopSession();
+        if (!(streams instanceof List) || ((List<?>) streams).isEmpty()) {
+            closeEvents();
             res.close();
             server.sessionEnded(this);
         }
     }
-
-    // ---------------------------------------------------------------- AirPlay 1
-
-    private void announce(RtspMessage req, RtspMessage.Response res) {
-        String sdp = new String(req.body, Util.UTF8);
-        byte[] fpKey = null, rsaKey = null, iv = null;
-        int ct = -1;
-        for (String raw : sdp.split("\n")) {
-            String line = raw.trim();
-            if (line.startsWith("a=rtpmap:")) {
-                String lower = line.toLowerCase(Locale.ROOT);
-                if (lower.contains("applelossless")) ct = 2;
-                else if (lower.contains("mpeg4-generic")) ct = 4;
-                else if (lower.contains("l16")) ct = 0;
-            } else if (line.startsWith("a=fmtp:")) {
-                String[] parts = line.substring(7).trim().split("\\s+");
-                if (parts.length > 1 && ct == 2) {
-                    try {
-                        announcedSpf = Integer.parseInt(parts[1]);
-                    } catch (NumberFormatException ignored) {
-                    }
-                }
-            } else if (line.startsWith("a=fpaeskey:")) {
-                fpKey = Util.base64(line.substring(11));
-            } else if (line.startsWith("a=rsaaeskey:")) {
-                rsaKey = Util.base64(line.substring(12));
-            } else if (line.startsWith("a=aesiv:")) {
-                iv = Util.base64(line.substring(8));
-            } else if (line.startsWith("s=") && line.length() > 2) {
-                clientName = line.substring(2);
-            }
-        }
-        if (ct != 2 && ct != 4) {
-            platform.log("Unsupported AirPlay 1 audio format");
-            res.status(415, "Unsupported Media Type");
-            return;
-        }
-        if (rsaKey != null) {
-            platform.log("RSA-encrypted AirPlay 1 streams are not supported");
-            res.status(415, "Unsupported Media Type");
-            return;
-        }
-        announcedCt = ct;
-        if (fpKey != null && iv != null && iv.length == 16) {
-            // fpaeskey holds a 72-byte FairPlay key, sometimes behind a short header.
-            byte[] ekey = fpKey.length > 72 ? java.util.Arrays.copyOfRange(fpKey, fpKey.length - 72, fpKey.length) : fpKey;
-            streamKey = fairPlay.decryptKey(ekey);
-            streamIv = iv;
-            encrypted = true;
-        } else {
-            streamKey = null;
-            streamIv = null;
-            encrypted = false;
-        }
-    }
-
-    private void setupTransport(RtspMessage req, RtspMessage.Response res) throws Exception {
-        String transport = req.header("Transport");
-        if (transport == null || announcedCt < 0) {
-            res.status(455, "Method Not Valid In This State");
-            return;
-        }
-        int controlPort = 0, timingPort = 0;
-        for (String part : transport.split(";")) {
-            String p = part.trim();
-            if (p.startsWith("control_port=")) controlPort = parseInt(p.substring(13));
-            else if (p.startsWith("timing_port=")) timingPort = parseInt(p.substring(12));
-        }
-        stopAudio();
-        audio = new AudioSession(platform, server.audioEvents(this), socket.getInetAddress(), encrypted ? streamKey : null, streamIv, config.bufferMs);
-        audio.setRemoteTimingPort(timingPort);
-        server.sessionStarted(this);
-        audio.startAudio(announcedCt, announcedSpf, controlPort);
-        audio.setVolume(server.volumeDb());
-        server.streamStarted(this, announcedCt);
-        res.header("Transport", "RTP/AVP/UDP;unicast;mode=record;server_port=" + audio.dataPort()
-                + ";control_port=" + audio.controlPort() + ";timing_port=" + audio.timingPort());
-        res.header("Session", "1");
-        res.header("Audio-Jack-Status", "connected; type=analog");
-    }
-
-    // ---------------------------------------------------------------- parameters
 
     private void getParameter(RtspMessage req, RtspMessage.Response res) {
         String body = new String(req.body, Util.UTF8);
@@ -363,8 +311,8 @@ final class RtspConnection implements Runnable {
                     try {
                         double db = Double.parseDouble(line.substring(7).trim());
                         server.setVolumeDb(db);
-                        AudioSession a = audio;
-                        if (a != null) a.setVolume(db);
+                        BufferedSession s = session;
+                        if (s != null) s.setVolume(db);
                     } catch (NumberFormatException ignored) {
                     }
                 } else if (line.startsWith("progress:")) {
@@ -384,20 +332,80 @@ final class RtspConnection implements Runnable {
         }
     }
 
-    private static int rtpInfoSeq(String rtpInfo) {
-        if (rtpInfo == null) return -1;
-        for (String part : rtpInfo.split(";")) {
-            String p = part.trim();
-            if (p.startsWith("seq=")) return parseInt(p.substring(4)) & 0xffff;
-        }
-        return -1;
+    // ---------------------------------------------------------------- event channel and addresses
+
+    /** The sender opens an (encrypted) event connection. Nothing needs to be sent on it, so it is held open. */
+    private synchronized int openEvents() throws IOException {
+        if (eventServer != null) return eventServer.getLocalPort();
+        final ServerSocket s = new ServerSocket(0);
+        eventServer = s;
+        eventThread = new Thread(new Runnable() {
+            @Override public void run() {
+                List<Socket> held = new ArrayList<>();
+                try {
+                    while (!closed) {
+                        final Socket c = s.accept();
+                        held.add(c);
+                        Thread drain = new Thread(new Runnable() {
+                            @Override public void run() {
+                                byte[] b = new byte[1024];
+                                try {
+                                    InputStream i = c.getInputStream();
+                                    while (i.read(b) >= 0) { /* discard */ }
+                                } catch (IOException ignored) {
+                                }
+                            }
+                        }, "airplay-events");
+                        drain.setDaemon(true);
+                        drain.start();
+                    }
+                } catch (IOException ignored) {
+                } finally {
+                    for (Socket c : held) {
+                        try {
+                            c.close();
+                        } catch (IOException ignored) {
+                        }
+                    }
+                }
+            }
+        }, "airplay-event-accept");
+        eventThread.setDaemon(true);
+        eventThread.start();
+        return s.getLocalPort();
     }
 
-    private static int parseInt(String s) {
-        try {
-            return Integer.parseInt(s.trim());
-        } catch (NumberFormatException e) {
-            return 0;
+    private synchronized void closeEvents() {
+        if (eventServer != null) {
+            try {
+                eventServer.close();
+            } catch (IOException ignored) {
+            }
+            eventServer = null;
         }
+    }
+
+    private List<Object> localAddresses() {
+        List<Object> list = new ArrayList<>();
+        list.add(socket.getLocalAddress().getHostAddress());
+        try {
+            Enumeration<NetworkInterface> e = NetworkInterface.getNetworkInterfaces();
+            while (e != null && e.hasMoreElements()) {
+                NetworkInterface ni = e.nextElement();
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                Enumeration<InetAddress> addrs = ni.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    InetAddress a = addrs.nextElement();
+                    String text = a.getHostAddress();
+                    if (a instanceof Inet6Address) {
+                        int pct = text.indexOf('%');
+                        if (pct >= 0) text = text.substring(0, pct);
+                    }
+                    if (!list.contains(text)) list.add(text);
+                }
+            }
+        } catch (SocketException ignored) {
+        }
+        return list;
     }
 }

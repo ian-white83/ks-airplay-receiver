@@ -2,9 +2,10 @@
 // FairPlay SAP v2.5 setup as reverse engineered by playfair (GPL-3.0); reply tables from java-airplay-lib.
 package ks.airplay.fairplay;
 
-import java.util.Arrays;
-
-/** One connection's FairPlay state: answers the two fp-setup messages and decrypts the stream key. */
+/**
+ * Answers the two fp-setup messages some senders still send. AirPlay 2 buffered audio carries its key in the
+ * encrypted SETUP, so nothing here decrypts keys.
+ */
 public final class FairPlay {
     private static final byte[][] REPLY = {
         {70, 80, 76, 89, 3, 1, 2, 0, 0, 0, 0, -126, 2, 0, 15, -97, 63, -98, 10, 37, 33, -37, -33, 49, 42, -78, -65, -78, -98, -115, 35, 43, 99, 118, -88, -56, 24, 112, 29, 34, -82, -109, -40, 39, 55, -2, -81, -99, -76, -3, -12, 28, 45, -70, -99, 31, 73, -54, -86, -65, 101, -111, -84, 31, 123, -58, -9, -32, 102, 61, 33, -81, -32, 21, 101, -107, 62, -85, -127, -12, 24, -50, -19, 9, 90, -37, 124, 61, 14, 37, 73, 9, -89, -104, 49, -44, -100, 57, -126, -105, 52, 52, -6, -53, 66, -58, 58, 28, -39, 17, -90, -2, -108, 26, -118, 109, 74, 116, 59, 70, -61, -89, 100, -98, 68, -57, -119, 85, -28, -99, -127, 85, 0, -107, 73, -60, -30, -9, -93, -10, -43, -70},
@@ -14,7 +15,6 @@ public final class FairPlay {
 
     private static final byte[] HEADER = {70, 80, 76, 89, 3, 1, 4, 0, 0, 0, 0, 20};
 
-    private final byte[] keyMessage = new byte[164];
     private boolean ready;
 
     /** The reply to an fp-setup body, or null when the body is not a supported FairPlay message. */
@@ -27,7 +27,6 @@ public final class FairPlay {
         }
         if (data.length == 164) {
             if (data[12] < 0 || data[12] > 3) return null; // key mode
-            System.arraycopy(data, 0, keyMessage, 0, 164);
             ready = true;
             byte[] reply = new byte[32];
             System.arraycopy(HEADER, 0, reply, 0, 12);
@@ -38,13 +37,4 @@ public final class FairPlay {
     }
 
     public boolean ready() { return ready; }
-
-    /** The 16-byte AES key inside a 72-byte FairPlay encrypted key (ekey or fpaeskey). */
-    public byte[] decryptKey(byte[] encryptedKey) {
-        if (!ready) throw new IllegalStateException("fp-setup has not finished");
-        if (encryptedKey == null || encryptedKey.length != 72) throw new IllegalArgumentException("ekey must be 72 bytes");
-        byte[] key = new byte[16];
-        new OmgHax().decryptAesKey(Arrays.copyOf(keyMessage, 164), encryptedKey, key);
-        return key;
-    }
 }

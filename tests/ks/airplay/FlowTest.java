@@ -9,67 +9,95 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-import javax.crypto.Cipher;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
-
-import ks.airplay.crypto.Ed25519;
-import ks.airplay.crypto.X25519;
-import ks.airplay.fairplay.FairPlay;
+import ks.airplay.crypto.ChaCha20Poly1305;
+import ks.airplay.crypto.Srp;
+import ks.airplay.hap.HapChannel;
+import ks.airplay.hap.HapPairing;
+import ks.airplay.hap.Tlv8;
+import ks.airplay.ptp.PtpClock;
 
 /**
- * Plays the part of an iPhone against a real server over localhost: /info, pairing, FairPlay, both SETUPs,
- * encrypted RTP audio with a lost packet that must come back through a resend request, volume, metadata and
- * TEARDOWN. Then the same audio over the AirPlay 1 ANNOUNCE path without encryption.
+ * Plays an AirPlay 2 iPhone against a real server over localhost, and its PTP master clock too: transient
+ * pairing, the encrypted control channel, /info, the PTP session, a buffered ALAC stream encrypted per packet,
+ * SETRATEANCHORTIME, pause, FLUSHBUFFERED and TEARDOWN. The fake speaker records when each frame would be
+ * heard, so the test checks the audio both for content and for landing at the anchored time.
  */
 public final class FlowTest {
     static final InetAddress LOCAL = InetAddress.getLoopbackAddress();
+    static final long MASTER_OFFSET = 1_700_000_000_000_000_000L; // the "iPhone" clock runs far from ours
 
     public static void main(String[] args) throws Exception {
-        TestSupport.loadTables();
-        airPlay2(false);
-        airPlay2(true);
-        airPlay1();
+        session(false);
+        session(true);
+        unsynchronized();
         System.out.println("FlowTest passed");
     }
 
-    /** Collects PCM in real time, like AudioTrack, so the jitter buffer behaves as on a device. */
+    /** A speaker that plays written audio in real time, about 30 ms after it is written, like AudioTrack. */
     static final class FakePlatform implements Platform {
-        final ByteArrayOutputStream pcm = new ByteArrayOutputStream();
+        static final long LATENCY = 30_000_000L;
         final List<String> logs = new CopyOnWriteArrayList<>();
         volatile float gain = -1;
-        volatile int samples;
+        final ByteArrayOutputStream pcm = new ByteArrayOutputStream();
+        final List<long[]> segments = new ArrayList<>(); // {first sample index, play time of that sample}
+        long writtenFrames;
+        boolean laggyDecoder; // behave like AAC through MediaCodec: one packet late, sometimes two at once
+        long startTime = -1; // play time of frame 0 of the current segment
+        long segmentFrames;
 
-        @Override public AudioSink openSink(int sampleRate, int channels) {
+        @Override public AudioSink openSink(final int rate, int channels) {
             return new AudioSink() {
                 @Override public boolean write(short[] s, int off, int len) {
-                    synchronized (pcm) {
+                    int frames = len / 2;
+                    synchronized (FakePlatform.this) {
+                        long now = System.nanoTime();
+                        if (startTime < 0 || startTime + segmentFrames * 1_000_000_000L / rate < now) {
+                            // empty or underrun: the next frame plays after the output latency
+                            startTime = now + LATENCY;
+                            segmentFrames = 0;
+                            segments.add(new long[] {writtenFrames, startTime});
+                        }
                         for (int i = 0; i < len; i++) {
                             pcm.write(s[off + i] & 0xff);
                             pcm.write((s[off + i] >> 8) & 0xff);
                         }
-                        samples += len;
+                        writtenFrames += frames;
+                        segmentFrames += frames;
                     }
-                    try {
-                        Thread.sleep(len / 2 * 1000L / sampleRate);
-                    } catch (InterruptedException e) {
-                        return false;
+                    // Block while more than 100 ms is queued, as a real track does.
+                    while (true) {
+                        long ahead;
+                        synchronized (FakePlatform.this) {
+                            ahead = startTime + segmentFrames * 1_000_000_000L / rate - System.nanoTime();
+                        }
+                        if (ahead < 100_000_000L) break;
+                        try {
+                            Thread.sleep(5);
+                        } catch (InterruptedException e) {
+                            return false;
+                        }
                     }
                     return true;
                 }
+                @Override public synchronized long nextPlayTime() {
+                    synchronized (FakePlatform.this) {
+                        long end = startTime + segmentFrames * 1_000_000_000L / rate;
+                        long now = System.nanoTime();
+                        return startTime < 0 || end < now ? now + LATENCY : end;
+                    }
+                }
                 @Override public void setGain(float g) { gain = g; }
-                @Override public void flush() {}
+                @Override public void flush() {
+                    synchronized (FakePlatform.this) { startTime = -1; }
+                }
                 @Override public void close() {}
             };
         }
@@ -77,20 +105,47 @@ public final class FlowTest {
         @Override public AudioDecoder openDecoder(int ct, int spf) {
             TestSupport.check(ct == 2, "ALAC requested");
             final AlacDecoder alac = AlacDecoder.airPlay(spf);
+            if (!laggyDecoder) {
+                return new AudioDecoder() {
+                    @Override public int decode(byte[] d, int o, int l, short[] out) { return alac.decode(d, o, l, out); }
+                    @Override public void close() {}
+                };
+            }
             return new AudioDecoder() {
-                @Override public int decode(byte[] d, int o, int l, short[] out) { return alac.decode(d, o, l, out); }
+                final java.util.ArrayDeque<short[]> held = new java.util.ArrayDeque<>();
+                int calls;
+                @Override public int decode(byte[] d, int o, int l, short[] out) {
+                    short[] frame = new short[alac.frameLength() * 2];
+                    int n = alac.decode(d, o, l, frame);
+                    held.add(java.util.Arrays.copyOf(frame, n * 2));
+                    calls++;
+                    if (calls == 1 || calls % 4 == 2) return 0; // nothing yet: output arrives later
+                    int written = 0;
+                    while (held.size() > 1) { // keep one packet of latency, release the rest
+                        short[] h = held.poll();
+                        System.arraycopy(h, 0, out, written, h.length);
+                        written += h.length;
+                    }
+                    return written / 2;
+                }
                 @Override public void close() {}
             };
         }
 
         @Override public void log(String message) { logs.add(message); }
 
-        short[] pcm() {
-            byte[] b;
-            synchronized (pcm) { b = pcm.toByteArray(); }
+        synchronized short[] samples() {
+            byte[] b = pcm.toByteArray();
             short[] out = new short[b.length / 2];
             for (int i = 0; i < out.length; i++) out[i] = (short) ((b[2 * i] & 0xff) | (b[2 * i + 1] << 8));
             return out;
+        }
+
+        /** When the given written frame reached the speaker. */
+        synchronized long playTime(long frame) {
+            long[] seg = null;
+            for (long[] s : segments) if (s[0] <= frame) seg = s;
+            return seg[1] + (frame - seg[0]) * 1_000_000_000L / 44100;
         }
     }
 
@@ -102,313 +157,333 @@ public final class FlowTest {
         @Override public void onSessionEnded() { seen.add("ended"); }
         @Override public void onVolume(double db) { seen.add("volume:" + db); }
         @Override public void onMetadata(Map<String, String> m) { seen.add("title:" + m.get("title")); }
-        @Override public void onArtwork(byte[] image, String type) { seen.add("art:" + (image == null ? 0 : image.length)); }
+        @Override public void onArtwork(byte[] image, String type) { seen.add("art"); }
         @Override public void onProgress(long s, long c, long e) {}
     }
 
-    /** A minimal RTSP client. */
+    /** An RTSP client that can switch to the HAP encrypted channel. */
     static final class Client {
         final Socket socket;
-        final InputStream in;
-        final OutputStream out;
+        InputStream in;
+        OutputStream out;
+        final InputStream rawIn;
+        final OutputStream rawOut;
         int cseq = 1;
 
         Client(int port) throws Exception {
             socket = new Socket(LOCAL, port);
             socket.setSoTimeout(10000);
-            in = new BufferedInputStream(socket.getInputStream());
-            out = socket.getOutputStream();
+            rawIn = new BufferedInputStream(socket.getInputStream());
+            rawOut = socket.getOutputStream();
+            in = rawIn;
+            out = rawOut;
         }
 
-        RtspMessage send(String method, String uri, String type, byte[] body, String... headers) throws Exception {
+        void encrypt(byte[] secret) {
+            byte[][] server = HapPairing.controlKeys(secret); // {server decrypt, server encrypt}
+            in = new BufferedInputStream(new HapChannel.Reader(rawIn, server[1]));
+            out = new HapChannel.Writer(rawOut, server[0]);
+        }
+
+        RtspMessage send(String method, String uri, String type, byte[] body) throws Exception {
             StringBuilder sb = new StringBuilder();
             sb.append(method).append(' ').append(uri).append(" RTSP/1.0\r\nCSeq: ").append(cseq++).append("\r\n");
-            sb.append("User-Agent: AirPlay/800.0\r\n");
-            for (int i = 0; i + 1 < headers.length; i += 2) sb.append(headers[i]).append(": ").append(headers[i + 1]).append("\r\n");
+            sb.append("User-Agent: AirPlay/700.0\r\n");
             if (type != null) sb.append("Content-Type: ").append(type).append("\r\n");
             sb.append("Content-Length: ").append(body == null ? 0 : body.length).append("\r\n\r\n");
             out.write(sb.toString().getBytes(Util.UTF8));
             if (body != null) out.write(body);
             out.flush();
-            // A response line parses as method=RTSP/1.0, uri=status.
             RtspMessage response = RtspMessage.read(in);
             TestSupport.check(response != null, method + " " + uri + " got a response");
             return response;
         }
 
-        RtspMessage ok(String method, String uri, String type, byte[] body, String... headers) throws Exception {
-            RtspMessage r = send(method, uri, type, body, headers);
-            TestSupport.check("200".equals(r.uri), method + " " + uri + " returned " + r.uri + " " + r.protocol);
+        RtspMessage ok(String method, String uri, String type, byte[] body) throws Exception {
+            RtspMessage r = send(method, uri, type, body);
+            TestSupport.check("200".equals(r.uri), method + " " + uri + " returned " + r.uri);
             return r;
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> plist(String method, String uri, Map<String, Object> body) throws Exception {
+            RtspMessage r = ok(method, uri, "application/x-apple-binary-plist", body == null ? null : BPlist.write(body));
+            return r.body.length == 0 ? new LinkedHashMap<String, Object>() : (Map<String, Object>) BPlist.parse(r.body);
+        }
+
+        /** HomeKit transient pair-setup as iOS does it. Returns the shared secret. */
+        byte[] pairTransient() throws Exception {
+            ok("POST", "/pair-pin-start", null, null);
+            byte[] m1 = new Tlv8.Writer().add(Tlv8.METHOD, 0).add(Tlv8.STATE, 1).add(Tlv8.FLAGS, Tlv8.FLAG_TRANSIENT).bytes();
+            Map<Integer, byte[]> m2 = Tlv8.parse(ok("POST", "/pair-setup", "application/octet-stream", m1).body);
+            TestSupport.check(Tlv8.intValue(m2, Tlv8.STATE, 0) == 2 && m2.get(Tlv8.PUBLIC_KEY).length > 300, "pair-setup M2");
+            Srp.Client srp = new Srp.Client(new SecureRandom());
+            byte[] proof = srp.proof(HapPairing.TRANSIENT_PIN, m2.get(Tlv8.SALT), m2.get(Tlv8.PUBLIC_KEY));
+            byte[] m3 = new Tlv8.Writer().add(Tlv8.STATE, 3).add(Tlv8.PUBLIC_KEY, srp.publicKey()).add(Tlv8.PROOF, proof).bytes();
+            Map<Integer, byte[]> m4 = Tlv8.parse(ok("POST", "/pair-setup", "application/octet-stream", m3).body);
+            TestSupport.check(Tlv8.intValue(m4, Tlv8.STATE, 0) == 4 && !m4.containsKey(Tlv8.ERROR), "pair-setup M4");
+            TestSupport.check(srp.checkServer(m4.get(Tlv8.PROOF)), "server proof");
+            return srp.sessionKey();
+        }
+    }
+
+    /** The iPhone's PTP master: Sync then Follow_Up carrying when Sync left, on the master clock. */
+    static final class Master {
+        final DatagramSocket socket;
+        final int eventPort, generalPort;
+        final long clockId = 0x1122334455667788L;
+        int seq;
+        volatile boolean running = true;
+        final Thread thread;
+
+        Master(int eventPort, int generalPort) throws Exception {
+            socket = new DatagramSocket(0, LOCAL);
+            this.eventPort = eventPort;
+            this.generalPort = generalPort;
+            thread = new Thread(new Runnable() {
+                @Override public void run() {
+                    while (running) {
+                        try {
+                            tick();
+                            Thread.sleep(125);
+                        } catch (Exception e) {
+                            return;
+                        }
+                    }
+                }
+            });
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        byte[] header(int type, int s) {
+            byte[] m = new byte[44];
+            m[0] = (byte) (0x10 | type);
+            m[1] = 2;
+            m[3] = 44;
+            for (int k = 0; k < 8; k++) m[20 + k] = (byte) (clockId >>> (56 - 8 * k));
+            m[30] = (byte) (s >> 8);
+            m[31] = (byte) s;
+            return m;
+        }
+
+        void tick() throws Exception {
+            int s = seq++ & 0xffff;
+            long sent = System.nanoTime() + MASTER_OFFSET;
+            byte[] sync = header(0x0, s);
+            socket.send(new DatagramPacket(sync, sync.length, LOCAL, eventPort));
+            byte[] fu = header(0x8, s);
+            long secs = sent / 1_000_000_000L, nanos = sent % 1_000_000_000L;
+            for (int k = 0; k < 6; k++) fu[34 + k] = (byte) (secs >>> (40 - 8 * k));
+            for (int k = 0; k < 4; k++) fu[40 + k] = (byte) (nanos >>> (24 - 8 * k));
+            socket.send(new DatagramPacket(fu, fu.length, LOCAL, generalPort));
+        }
+
+        void close() {
+            running = false;
+            socket.close();
         }
     }
 
     @SuppressWarnings("unchecked")
-    static void airPlay2(boolean pair) throws Exception {
+    static void session(boolean laggy) throws Exception {
+        System.out.println(laggy ? " with a decoder that lags like AAC:" : " with ALAC:");
         FakePlatform platform = new FakePlatform();
+        platform.laggyDecoder = laggy;
         Events events = new Events();
-        AirPlayConfig config = new AirPlayConfig("Test Kiosk", "02:AA:BB:CC:DD:EE", 0, AirPlayConfig.DEFAULT_FEATURES, pair, 200);
+        PtpClock ptp = new PtpClock(new PtpClock.Log() { @Override public void log(String m) { platform.log(m); } }, 0, 0);
+        ptp.start();
+        Master master = new Master(ptp.eventPort(), ptp.generalPort());
+        AirPlayConfig config = new AirPlayConfig("Test Kiosk", "02:AA:BB:CC:DD:EE", 0, AirPlayConfig.DEFAULT_FEATURES);
         AirPlayServer server = new AirPlayServer(config, platform, events);
+        server.setClock(new BufferedSession.Clock() { @Override public Long offset(long id) { return ptp.offset(id); } });
         int port = server.start();
-        SecureRandom random = new SecureRandom();
-        DatagramSocket timing = new DatagramSocket(0, LOCAL);
-        DatagramSocket control = new DatagramSocket(0, LOCAL);
         try {
             Client client = new Client(port);
-            Map<String, Object> info = (Map<String, Object>) BPlist.parse(client.ok("GET", "/info", null, null).body);
-            TestSupport.check("Test Kiosk".equals(info.get("name")), "/info name");
-            TestSupport.check(Arrays.equals((byte[]) info.get("pk"), config.publicKey), "/info public key");
+            Map<String, Object> info = client.plist("GET", "/info", null);
+            TestSupport.check("Test Kiosk".equals(info.get("name")) && Long.valueOf(AirPlayConfig.DEFAULT_FEATURES).equals(info.get("features")), "/info before pairing");
 
-            byte[] secret = null;
-            if (pair) secret = pairVerify(client, config);
+            client.encrypt(client.pairTransient());
+            info = client.plist("GET", "/info", null);
+            TestSupport.check(config.deviceIdString().equals(info.get("deviceID")), "/info over the encrypted channel");
 
-            byte[] fp1 = {0x46, 0x50, 0x4c, 0x59, 0x03, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x02, 0x00, 0x01, (byte) 0xbb};
-            TestSupport.check(client.ok("POST", "/fp-setup", "application/octet-stream", fp1).body.length == 142, "fp-setup 1");
-            byte[] fp2 = new byte[164];
-            random.nextBytes(fp2);
-            fp2[4] = 3;
-            fp2[12] = 1;
-            TestSupport.check(client.ok("POST", "/fp-setup", "application/octet-stream", fp2).body.length == 32, "fp-setup 2");
-
-            byte[] ekey = new byte[72], eiv = new byte[16];
-            random.nextBytes(ekey);
-            random.nextBytes(eiv);
-            FairPlay sender = new FairPlay();
-            sender.setup(fp2);
-            byte[] key = sender.decryptKey(ekey);
-            if (secret != null) {
-                MessageDigest sha = MessageDigest.getInstance("SHA-512");
-                sha.update(key);
-                sha.update(secret);
-                key = Arrays.copyOf(sha.digest(), 16);
-            }
-
-            Map<String, Object> setup1 = new LinkedHashMap<>();
-            setup1.put("ekey", ekey);
-            setup1.put("eiv", eiv);
-            setup1.put("timingProtocol", "NTP");
-            setup1.put("timingPort", (long) timing.getLocalPort());
-            setup1.put("name", "Test iPhone");
-            Map<String, Object> r1 = (Map<String, Object>) BPlist.parse(client.ok("SETUP", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(setup1)).body);
-            TestSupport.check(BPlist.getLong(r1, "timingPort", 0) > 0, "SETUP returned a timing port");
+            Map<String, Object> session = new LinkedHashMap<>();
+            session.put("timingProtocol", "PTP");
+            session.put("name", "Test iPhone");
+            session.put("groupUUID", "5D1E8C3A-0000-0000-0000-000000000001");
+            session.put("timingPeerInfo", new LinkedHashMap<String, Object>());
+            Map<String, Object> r1 = client.plist("SETUP", "rtsp://x/1", session);
+            TestSupport.check(BPlist.getLong(r1, "eventPort", 0) > 0 && r1.get("timingPeerInfo") instanceof Map, "PTP session SETUP");
+            Socket eventChannel = new Socket(LOCAL, (int) BPlist.getLong(r1, "eventPort", 0));
 
             TestSupport.AlacFixture fixture = TestSupport.alacFixture();
+            byte[] shk = new byte[32];
+            new SecureRandom().nextBytes(shk);
             Map<String, Object> stream = new LinkedHashMap<>();
-            stream.put("type", 96L);
+            stream.put("type", 103L);
             stream.put("ct", 2L);
             stream.put("spf", (long) fixture.frameLength);
-            stream.put("controlPort", (long) control.getLocalPort());
-            Map<String, Object> setup2 = new LinkedHashMap<>();
-            setup2.put("streams", new ArrayList<Object>(Collections.singletonList(stream)));
-            Map<String, Object> r2 = (Map<String, Object>) BPlist.parse(client.ok("SETUP", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(setup2)).body);
+            stream.put("shk", shk);
+            stream.put("audioFormat", 0x40000L);
+            Map<String, Object> setup = new LinkedHashMap<>();
+            setup.put("streams", new ArrayList<Object>(Collections.singletonList(stream)));
+            Map<String, Object> r2 = client.plist("SETUP", "rtsp://x/1", setup);
             Map<String, Object> s0 = (Map<String, Object>) ((List<Object>) r2.get("streams")).get(0);
-            int dataPort = (int) BPlist.getLong(s0, "dataPort", 0), serverControl = (int) BPlist.getLong(s0, "controlPort", 0);
-            TestSupport.check(dataPort > 0 && serverControl > 0, "audio ports");
-
+            int dataPort = (int) BPlist.getLong(s0, "dataPort", 0);
+            TestSupport.check(dataPort > 0 && BPlist.getLong(s0, "type", 0) == 103, "buffered stream SETUP");
             client.ok("RECORD", "rtsp://x/1", null, null);
             client.ok("SET_PARAMETER", "rtsp://x/1", "text/parameters", "volume: -15.000000\r\n".getBytes(Util.UTF8));
-            client.ok("SET_PARAMETER", "rtsp://x/1", "application/x-dmap-tagged", dmapTitle("Test Song"));
-            client.ok("POST", "/feedback", null, null);
+            client.ok("SETPEERS", "rtsp://x/1", "/peer-list-changed", BPlist.write(new ArrayList<Object>(Collections.singletonList("127.0.0.1"))));
 
-            streamAudio(fixture, key, eiv, dataPort, serverControl, control, 5);
+            // Let the clock settle, then push audio well ahead and anchor its first frame 600 ms from now.
+            long deadline = System.currentTimeMillis() + 5000;
+            while (ptp.offset(master.clockId) == null && System.currentTimeMillis() < deadline) Thread.sleep(50);
+            Long offset = ptp.offset(master.clockId);
+            TestSupport.check(offset != null && Math.abs(offset - MASTER_OFFSET) < 5_000_000L, "PTP offset found: " + offset);
+
+            long rtp0 = 0xFFFFF000L; // crosses the 32-bit wrap
+            Socket data = new Socket(LOCAL, dataPort);
+            sendPackets(data.getOutputStream(), fixture, shk, 100, rtp0);
+            long anchorMaster = System.nanoTime() + MASTER_OFFSET + 600_000_000L;
+            client.ok("SETRATEANCHORTIME", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(anchor(master.clockId, rtp0, anchorMaster, 1)));
 
             short[] expected = TestSupport.pcmFixture();
-            waitFor(platform, expected.length);
-            short[] got = platform.pcm();
+            waitForSamples(platform, expected.length, 10000);
+            short[] got = platform.samples();
             int first = firstSound(got);
             TestSupport.check(first >= 0, "audio arrived");
-            TestSupport.check(got.length - first >= expected.length, "all audio played (" + (got.length - first) + " of " + expected.length + ")");
-            for (int i = 0; i < expected.length; i++) TestSupport.check(got[first + i] == expected[i], "decrypted PCM sample " + i + (pair ? " (paired)" : ""));
-            TestSupport.check(Math.abs(platform.gain - 0.25f) < 1e-6, "volume applied to the sink");
+            long heard = platform.playTime(first / 2);
+            long due = anchorMaster - MASTER_OFFSET;
+            System.out.println("  first frame timing error: " + (heard - due) / 1000 + " us");
+            TestSupport.check(Math.abs(heard - due) < 3_000_000L, "first frame heard on time: off by " + (heard - due) / 1000 + " us");
+            int mismatched = 0;
+            for (int i = 0; i < expected.length && first + i < got.length; i++) if (got[first + i] != expected[i]) mismatched++;
+            // Drift correction may drop or repeat a frame or two; the audio must otherwise be intact.
+            System.out.println("  samples differing after drift correction: " + mismatched + " of " + expected.length);
+            TestSupport.check(mismatched < expected.length / 50, "decrypted and decoded audio matches (" + mismatched + " samples differ)");
+            TestSupport.check(Math.abs(platform.gain - 0.25f) < 1e-6, "volume applied");
 
-            // The server asks for the time on the sender's timing port.
-            timing.setSoTimeout(4000);
-            DatagramPacket t = new DatagramPacket(new byte[64], 64);
-            timing.receive(t);
-            TestSupport.check((t.getData()[1] & 0xff) == 0xd2, "timing request");
-
-            // Pause: the sender tears down only the audio stream, then resumes with a new stream SETUP.
-            Map<String, Object> pause = new LinkedHashMap<>();
-            Map<String, Object> pausedStream = new LinkedHashMap<>();
-            pausedStream.put("type", 96L);
-            pause.put("streams", new ArrayList<Object>(Collections.singletonList(pausedStream)));
-            RtspMessage paused = client.ok("TEARDOWN", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(pause));
-            TestSupport.check(paused.header("Connection") == null, "pause keeps the connection");
-            int before = platform.samples;
-            Map<String, Object> r3 = (Map<String, Object>) BPlist.parse(client.ok("SETUP", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(setup2)).body);
-            Map<String, Object> s1 = (Map<String, Object>) ((List<Object>) r3.get("streams")).get(0);
-            streamAudio(fixture, key, eiv, (int) BPlist.getLong(s1, "dataPort", 0), (int) BPlist.getLong(s1, "controlPort", 0), control, 2);
-            long resumeDeadline = System.currentTimeMillis() + 10000;
-            while (platform.samples - before < expected.length && System.currentTimeMillis() < resumeDeadline) Thread.sleep(50);
-            TestSupport.check(platform.samples - before >= expected.length, "audio resumes after a pause");
+            // Pause, flush everything, and resume with new audio anchored later.
+            client.ok("SETRATEANCHORTIME", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(anchor(master.clockId, rtp0, anchorMaster, 0)));
+            Map<String, Object> flush = new LinkedHashMap<>();
+            flush.put("flushUntilSeq", 200L);
+            flush.put("flushUntilTS", rtp0 + 100_000L);
+            client.plist("FLUSHBUFFERED", "rtsp://x/1", flush);
+            long resumeRtp = rtp0 + 500_000L;
+            int before = platform.samples().length;
+            sendPackets(data.getOutputStream(), fixture, shk, 300, resumeRtp);
+            long resumeMaster = System.nanoTime() + MASTER_OFFSET + 500_000_000L;
+            client.ok("SETRATEANCHORTIME", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(anchor(master.clockId, resumeRtp, resumeMaster, 1)));
+            waitForSamples(platform, before + expected.length, 10000);
+            short[] after = platform.samples();
+            int resumed = -1;
+            for (int i = before; i < after.length; i++) if (after[i] != 0) { resumed = i - (i % 2); break; }
+            TestSupport.check(resumed >= 0, "audio resumed");
+            long resumeHeard = platform.playTime(resumed / 2);
+            System.out.println("  resume timing error: " + (resumeHeard - (resumeMaster - MASTER_OFFSET)) / 1000 + " us, PTP offset error: " + (ptp.offset(master.clockId) - MASTER_OFFSET) / 1000 + " us");
+            TestSupport.check(Math.abs(resumeHeard - (resumeMaster - MASTER_OFFSET)) < 3_000_000L,
+                    "resumed on time: off by " + (resumeHeard - (resumeMaster - MASTER_OFFSET)) / 1000 + " us");
 
             RtspMessage teardown = client.send("TEARDOWN", "rtsp://x/1", null, null);
             TestSupport.check("close".equalsIgnoreCase(teardown.header("Connection")), "TEARDOWN closes");
             Thread.sleep(300);
-            TestSupport.check(events.seen.contains("session:Test iPhone"), "session event " + events.seen);
-            TestSupport.check(events.seen.contains("stream:2") && events.seen.contains("active:true") && events.seen.contains("ended"), "stream events " + events.seen);
-            TestSupport.check(events.seen.contains("title:Test Song") && events.seen.contains("volume:-15.0"), "metadata events " + events.seen);
-            TestSupport.check(!server.hasActiveSession(), "session cleared");
-        } finally {
-            timing.close();
-            control.close();
-            server.stop();
-        }
-    }
-
-    /** Legacy pair-setup and pair-verify from the sender's side. Returns the shared secret. */
-    static byte[] pairVerify(Client client, AirPlayConfig config) throws Exception {
-        SecureRandom random = new SecureRandom();
-        byte[] edSeed = new byte[32];
-        random.nextBytes(edSeed);
-        byte[] edPublic = Ed25519.publicKey(edSeed);
-        byte[] serverEd = client.ok("POST", "/pair-setup", "application/octet-stream", edPublic).body;
-        TestSupport.check(Arrays.equals(serverEd, config.publicKey), "pair-setup key");
-        byte[] curvePrivate = X25519.generatePrivateKey(random);
-        byte[] curvePublic = X25519.publicKey(curvePrivate);
-        byte[] step1 = new byte[68];
-        step1[0] = 1;
-        System.arraycopy(curvePublic, 0, step1, 4, 32);
-        System.arraycopy(edPublic, 0, step1, 36, 32);
-        byte[] reply = client.ok("POST", "/pair-verify", "application/octet-stream", step1).body;
-        TestSupport.check(reply.length == 96, "pair-verify reply");
-        byte[] serverCurve = Arrays.copyOf(reply, 32);
-        byte[] secret = X25519.sharedSecret(curvePrivate, serverCurve);
-        Cipher ctr = ctr(secret);
-        byte[] serverSignature = ctr.update(Arrays.copyOfRange(reply, 32, 96));
-        TestSupport.check(Ed25519.verify(serverEd, Pairing.concat(serverCurve, curvePublic), serverSignature), "server signature");
-        byte[] ours = ctr.update(Ed25519.sign(edSeed, Pairing.concat(curvePublic, serverCurve)));
-        byte[] step2 = new byte[68];
-        System.arraycopy(ours, 0, step2, 4, 64);
-        client.ok("POST", "/pair-verify", "application/octet-stream", step2);
-        return secret;
-    }
-
-    static Cipher ctr(byte[] secret) throws Exception {
-        MessageDigest sha = MessageDigest.getInstance("SHA-512");
-        sha.update("Pair-Verify-AES-Key".getBytes(Util.UTF8));
-        sha.update(secret);
-        byte[] key = Arrays.copyOf(sha.digest(), 16);
-        sha.update("Pair-Verify-AES-IV".getBytes(Util.UTF8));
-        sha.update(secret);
-        byte[] iv = Arrays.copyOf(sha.digest(), 16);
-        Cipher c = Cipher.getInstance("AES/CTR/NoPadding");
-        c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
-        return c;
-    }
-
-    /** Send the fixture as RTP, holding back one packet until the server asks for it. */
-    static void streamAudio(TestSupport.AlacFixture fixture, byte[] key, byte[] iv, int dataPort, int serverControl, DatagramSocket control, int dropIndex) throws Exception {
-        DatagramSocket data = new DatagramSocket(0, LOCAL);
-        try {
-            List<byte[]> packets = new ArrayList<>();
-            int seq = 65530; // crosses the 16-bit wrap
-            long ts = 1234567;
-            for (byte[] frame : fixture.packets) {
-                byte[] p = new byte[12 + frame.length];
-                p[0] = (byte) 0x80;
-                p[1] = 0x60;
-                p[2] = (byte) (seq >> 8);
-                p[3] = (byte) seq;
-                p[4] = (byte) (ts >> 24);
-                p[5] = (byte) (ts >> 16);
-                p[6] = (byte) (ts >> 8);
-                p[7] = (byte) ts;
-                byte[] payload = frame.clone();
-                if (key != null) {
-                    int blocks = payload.length / 16 * 16;
-                    Cipher c = Cipher.getInstance("AES/CBC/NoPadding");
-                    c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
-                    System.arraycopy(c.doFinal(payload, 0, blocks), 0, payload, 0, blocks);
-                }
-                System.arraycopy(payload, 0, p, 12, payload.length);
-                packets.add(p);
-                seq = (seq + 1) & 0xffff;
-                ts += fixture.frameLength;
-            }
-            for (int i = 0; i < packets.size(); i++) {
-                if (i == dropIndex) continue;
-                byte[] p = packets.get(i);
-                data.send(new DatagramPacket(p, p.length, LOCAL, dataPort));
-                Thread.sleep(20);
-            }
-            // Answer the resend request for the missing packet.
-            control.setSoTimeout(3000);
-            DatagramPacket request = new DatagramPacket(new byte[64], 64);
-            try {
-                control.receive(request);
-            } catch (SocketTimeoutException e) {
-                throw new AssertionError("No resend request for the lost packet");
-            }
-            byte[] r = request.getData();
-            TestSupport.check((r[1] & 0xff) == 0xd5, "resend request type");
-            int missing = Util.getU16(r, 4), count = Util.getU16(r, 6);
-            byte[] dropped = packets.get(dropIndex);
-            TestSupport.check(missing == Util.getU16(dropped, 2) && count == 1, "resend asks for the lost packet");
-            byte[] resend = new byte[4 + dropped.length];
-            resend[0] = (byte) 0x80;
-            resend[1] = (byte) 0xd6;
-            System.arraycopy(dropped, 0, resend, 4, dropped.length);
-            control.send(new DatagramPacket(resend, resend.length, LOCAL, serverControl));
-        } finally {
+            TestSupport.check(events.seen.contains("session:Test iPhone") && events.seen.contains("stream:2"), "session events " + events.seen);
+            TestSupport.check(events.seen.contains("active:true") && events.seen.contains("ended") && events.seen.contains("volume:-15.0"), "events " + events.seen);
             data.close();
+            eventChannel.close();
+        } finally {
+            master.close();
+            server.stop();
+            ptp.stop();
         }
     }
 
-    static void airPlay1() throws Exception {
+    /** Without a PTP clock the receiver still plays, as a standalone speaker shortly after the anchor. */
+    @SuppressWarnings("unchecked")
+    static void unsynchronized() throws Exception {
         FakePlatform platform = new FakePlatform();
-        Events events = new Events();
-        AirPlayConfig config = new AirPlayConfig("Test Kiosk", "02:AA:BB:CC:DD:EF", 0, AirPlayConfig.DEFAULT_FEATURES, false, 200);
-        AirPlayServer server = new AirPlayServer(config, platform, events);
+        AirPlayConfig config = new AirPlayConfig("Solo", "02:AA:BB:CC:DD:EF", 0, AirPlayConfig.DEFAULT_FEATURES);
+        AirPlayServer server = new AirPlayServer(config, platform, new Events());
         int port = server.start();
-        DatagramSocket control = new DatagramSocket(0, LOCAL);
         try {
-            TestSupport.AlacFixture fixture = TestSupport.alacFixture();
             Client client = new Client(port);
-            client.ok("OPTIONS", "*", null, null);
-            String sdp = "v=0\r\no=iTunes 1 0 IN IP4 127.0.0.1\r\ns=Old Mac\r\nm=audio 0 RTP/AVP 96\r\n"
-                    + "a=rtpmap:96 AppleLossless\r\na=fmtp:96 " + fixture.frameLength + " 0 16 40 10 14 2 255 0 0 44100\r\n";
-            client.ok("ANNOUNCE", "rtsp://x/1", "application/sdp", sdp.getBytes(Util.UTF8));
-            RtspMessage setup = client.ok("SETUP", "rtsp://x/1", null, null,
-                    "Transport", "RTP/AVP/UDP;unicast;interleaved=0-1;mode=record;control_port=" + control.getLocalPort() + ";timing_port=0");
-            String transport = setup.header("Transport");
-            int dataPort = 0, serverControl = 0;
-            for (String part : transport.split(";")) {
-                if (part.startsWith("server_port=")) dataPort = Integer.parseInt(part.substring(12));
-                if (part.startsWith("control_port=")) serverControl = Integer.parseInt(part.substring(13));
-            }
-            TestSupport.check(dataPort > 0 && serverControl > 0, "AirPlay 1 ports");
-            client.ok("RECORD", "rtsp://x/1", null, null, "RTP-Info", "seq=65530;rtptime=1234567");
-            streamAudio(fixture, null, null, dataPort, serverControl, control, 3);
+            client.encrypt(client.pairTransient());
+            Map<String, Object> session = new LinkedHashMap<>();
+            session.put("timingProtocol", "PTP");
+            client.plist("SETUP", "rtsp://x/1", session);
+            TestSupport.AlacFixture fixture = TestSupport.alacFixture();
+            byte[] shk = new byte[32];
+            Map<String, Object> stream = new LinkedHashMap<>();
+            stream.put("type", 103L);
+            stream.put("ct", 2L);
+            stream.put("spf", (long) fixture.frameLength);
+            stream.put("shk", shk);
+            Map<String, Object> setup = new LinkedHashMap<>();
+            setup.put("streams", new ArrayList<Object>(Collections.singletonList(stream)));
+            Map<String, Object> s0 = (Map<String, Object>) ((List<Object>) client.plist("SETUP", "rtsp://x/1", setup).get("streams")).get(0);
+            Socket data = new Socket(LOCAL, (int) BPlist.getLong(s0, "dataPort", 0));
+            sendPackets(data.getOutputStream(), fixture, shk, 1, 1000);
+            client.ok("SETRATEANCHORTIME", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(anchor(42, 1000, 123_456_789_000L, 1)));
             short[] expected = TestSupport.pcmFixture();
-            waitFor(platform, expected.length);
-            short[] got = platform.pcm();
-            int first = firstSound(got);
-            TestSupport.check(first >= 0 && got.length - first >= expected.length, "AirPlay 1 audio played");
-            for (int i = 0; i < expected.length; i++) TestSupport.check(got[first + i] == expected[i], "AirPlay 1 PCM sample " + i);
-            TestSupport.check(events.seen.contains("session:Old Mac"), "AirPlay 1 sender name " + events.seen);
-            client.send("TEARDOWN", "rtsp://x/1", null, null);
+            waitForSamples(platform, expected.length, 10000);
+            TestSupport.check(firstSound(platform.samples()) >= 0, "plays without PTP");
+            data.close();
         } finally {
-            control.close();
             server.stop();
         }
     }
 
-    static byte[] dmapTitle(String title) {
-        byte[] t = title.getBytes(Util.UTF8);
-        byte[] b = new byte[16 + t.length];
-        int len = 8 + t.length;
-        byte[] header = {'m', 'l', 'i', 't', (byte) (len >>> 24), (byte) (len >>> 16), (byte) (len >>> 8), (byte) len,
-                'm', 'i', 'n', 'm', (byte) (t.length >>> 24), (byte) (t.length >>> 16), (byte) (t.length >>> 8), (byte) t.length};
-        System.arraycopy(header, 0, b, 0, 16);
-        System.arraycopy(t, 0, b, 16, t.length);
-        return b;
+    static Map<String, Object> anchor(long clock, long rtp, long masterNanos, int rate) {
+        Map<String, Object> a = new LinkedHashMap<>();
+        a.put("networkTimeSecs", masterNanos / 1_000_000_000L);
+        long frac = ((masterNanos % 1_000_000_000L) << 32) / 1_000_000_000L; // top 32 bits of the 64-bit fraction
+        a.put("networkTimeFrac", frac << 32);
+        a.put("networkTimeTimelineID", clock);
+        a.put("rtpTime", rtp & 0xffffffffL);
+        a.put("rate", (long) rate);
+        return a;
     }
 
-    static void waitFor(FakePlatform platform, int samples) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 15000;
+    /** Buffered packets: 2-byte length, RTP header, ChaCha20-Poly1305 payload and tag, 8-byte nonce. */
+    static void sendPackets(OutputStream out, TestSupport.AlacFixture fixture, byte[] shk, int seq0, long rtp0) throws Exception {
+        ByteArrayOutputStream all = new ByteArrayOutputStream();
+        long rtp = rtp0;
+        int seq = seq0;
+        for (byte[] frame : fixture.packets) {
+            byte[] header = new byte[12];
+            int s = (seq & 0x7fffff) | 0x80000000;
+            header[0] = (byte) (s >>> 24); header[1] = (byte) (s >>> 16); header[2] = (byte) (s >>> 8); header[3] = (byte) s;
+            long t = rtp & 0xffffffffL;
+            header[4] = (byte) (t >>> 24); header[5] = (byte) (t >>> 16); header[6] = (byte) (t >>> 8); header[7] = (byte) t;
+            header[8] = 0x16; // SSRC
+            byte[] nonce8 = new byte[8];
+            new SecureRandom().nextBytes(nonce8);
+            byte[] nonce = new byte[12];
+            System.arraycopy(nonce8, 0, nonce, 4, 8);
+            byte[] aad = java.util.Arrays.copyOfRange(header, 4, 12);
+            byte[] sealed = ChaCha20Poly1305.seal(shk, nonce, frame, 0, frame.length, aad);
+            int len = 2 + 12 + sealed.length + 8;
+            all.write(len >> 8);
+            all.write(len);
+            all.write(header);
+            all.write(sealed);
+            all.write(nonce8);
+            seq++;
+            rtp += fixture.frameLength;
+        }
+        // One corrupted packet must be dropped without upsetting the stream.
+        byte[] junk = new byte[60];
+        junk[0] = 0;
+        junk[1] = 60;
+        all.write(junk);
+        out.write(all.toByteArray());
+        out.flush();
+    }
+
+    static void waitForSamples(FakePlatform platform, int samples, long millis) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + millis;
         while (System.currentTimeMillis() < deadline) {
-            short[] got = platform.pcm();
+            short[] got = platform.samples();
             int first = firstSound(got);
             if (first >= 0 && got.length - first >= samples) return;
             Thread.sleep(50);
@@ -417,7 +492,7 @@ public final class FlowTest {
 
     /** The fixture starts with a sine wave, so the first non-zero sample marks where it begins. */
     static int firstSound(short[] pcm) {
-        for (int i = 0; i < pcm.length; i++) if (pcm[i] != 0) return i - (i % 2 == 0 ? 0 : 1);
+        for (int i = 0; i < pcm.length; i++) if (pcm[i] != 0) return i - (i % 2);
         return -1;
     }
 }

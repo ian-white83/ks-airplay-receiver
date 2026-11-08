@@ -14,6 +14,11 @@ public interface Platform {
         void setGain(float gain);
         /** Drop anything queued and stop until the next write. */
         void flush();
+        /**
+         * When the next frame written will reach the speaker, on the System.nanoTime() clock. Playout uses this
+         * to land each frame at the moment the sender's anchor asks for.
+         */
+        long nextPlayTime();
         void close();
     }
 

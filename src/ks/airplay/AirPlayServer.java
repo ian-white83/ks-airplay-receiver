@@ -18,7 +18,7 @@ public final class AirPlayServer {
     public interface Listener {
         /** A sender set up a session. */
         void onSessionStarted(String clientName);
-        /** The audio stream began: ct 2 ALAC, 4 AAC-LC, 8 AAC-ELD. */
+        /** The buffered audio stream began: ct 2 ALAC, 4 AAC-LC. */
         void onStreamStarted(String clientName, int ct);
         /** Audio started or stopped reaching the speaker. */
         void onAudioActive(boolean active);
@@ -42,12 +42,18 @@ public final class AirPlayServer {
     private RtspConnection active;
     private volatile double volumeDb = -12.0;
     private volatile float duck = 1f;
+    private volatile BufferedSession.Clock clock;
 
     public AirPlayServer(AirPlayConfig config, Platform platform, Listener listener) {
         this.config = config;
         this.platform = platform;
         this.listener = listener;
     }
+
+    /** The PTP clock to play against, or null to play unsynchronized (no multi-room). */
+    public void setClock(BufferedSession.Clock clock) { this.clock = clock; }
+
+    BufferedSession.Clock clock() { return clock; }
 
     public AirPlayConfig config() { return config; }
     Listener listener() { return listener; }
@@ -143,8 +149,8 @@ public final class AirPlayServer {
         duck = gain;
         RtspConnection c;
         synchronized (this) { c = active; }
-        AudioSession a = c == null ? null : c.audio();
-        if (a != null) a.setDuck(gain);
+        BufferedSession s = c == null ? null : c.session();
+        if (s != null) s.setDuck(gain);
     }
 
     // ---------------------------------------------------------------- connection callbacks
@@ -163,13 +169,9 @@ public final class AirPlayServer {
     }
 
     void streamStarted(RtspConnection connection, int ct) {
-        AudioSession a = connection.audio();
-        if (a != null) a.setDuck(duck);
+        BufferedSession s = connection.session();
+        if (s != null) s.setDuck(duck);
         listener.onStreamStarted(connection.clientName(), ct);
-    }
-
-    void audioStopped(RtspConnection connection) {
-        // AudioSession reports onAudioActive(false) itself when it closes.
     }
 
     void sessionEnded(RtspConnection connection) {
@@ -186,8 +188,8 @@ public final class AirPlayServer {
         sessionEnded(connection);
     }
 
-    AudioSession.Events audioEvents(final RtspConnection connection) {
-        return new AudioSession.Events() {
+    BufferedSession.Events audioEvents(final RtspConnection connection) {
+        return new BufferedSession.Events() {
             @Override public void onAudioActive(boolean value) {
                 boolean current;
                 synchronized (AirPlayServer.this) { current = active == connection; }

@@ -20,21 +20,21 @@ import javax.crypto.KeyAgreement;
 
 import ks.airplay.crypto.Ed25519;
 import ks.airplay.crypto.X25519;
+import ks.airplay.crypto.ChaCha20Poly1305;
+import ks.airplay.crypto.Hkdf;
+import ks.airplay.crypto.Srp;
 import ks.airplay.fairplay.FairPlay;
+import ks.airplay.hap.Tlv8;
 
 /** Unit tests for the protocol building blocks. Run by tools/test.py on a desktop JVM. */
 public final class CoreTest {
-    /** keyMessage (164 bytes), ekey (72 bytes), AES key from UxPlay's C playfair. */
-    static final String[][] FAIRPLAY_VECTORS = {
-        {"a610b14203ee22ce44337efa00af12fa7fa2debb61c6aff52cac8bac26340fd45fe3e10e55038b7c7d3b37734e54fa55f32ee02ecf7c8df804514b6bfae4a96fa0e7ff13f37217c79445cb1a1c1bf9d39ecedacf77d992bbda972d3a3d291403ecc45f743403588a6eb8455cd9ed69e7579cb8a781d677af812afe61af171a1426075d320dac7d8229227d5b07edf3818df9aa17ae55e5d20e68e2f066a549aa42a7b62b", "620d8c599a794f6645a013996d2e214275e7d6b1852cc97a823c47bc4064121c685268a5534a3d262de629de5e6af8d42336587393d5fdb5953cb33b483668d49fe5173421734ab7", "c5649f29006afee4d8be7ba0fbc16c85"},
-        {"7b9503d4036aa2916970cfb201a0838ae5c49b595cea4abfdd87ce27b0d69eed191ad2b689b273d9889ffe35a121898398737a0080ba473f29887995fe7adc3591af8dca5542c26de54280ba2589a9397f368ac23cfb2749869554f5050f8f0efb2a82d608bea0616ad7bd70155077c8fc14d992a86ba37f426b485172b0464f58a746572ff77c54b4b056d75b5a6eabbed18b414e7333e2e0f2a8314d9a1594214dbbe8", "87dfe1865eabd3fdae3b76e0c51c2dfdf0e7dd0c76d58b64e6cf93c6fe456e92ade0f0793b626007f389496ae88c53553aa9e152f83117a68818a5b40b6018682d4902abd324cdd3", "72619b70c278d14a45a43dcd733a4506"},
-        {"095266e703a6a36807d489f40227eb86720158b1fc3d05cd67e17943db476f5a9c2095316a5ef7df7401a629b7d6e4a016be23aeb2888b922d68b7bdc0b979dc97fe8404ba13d2dae699145ae4c8154298706e8928e1501d3902f1ee4420f2bbe3f418e423f10b6beaacd363b4bec10a69c2b85648f9304184187c6de35398c90a2424a3cbaf8a2c9a770f874e8e8325a3468b6d82ee705c646190a1c7b211389a9f6bde", "8dbf9a614b3441f2f2927a4ebe218afebda0fb0189b964e0c45438abbf9fd40c5c145a4a35311e8bf75613e2da7a9f6518b77235903289f4a4bf953266dbeafca973dc334b64bae1", "5b7b289f222d443f0661b2a2882b367e"},
-    };
-
     public static void main(String[] args) throws Exception {
-        TestSupport.loadTables();
         ed25519();
         x25519();
+        chacha();
+        hkdfAndSrp();
+        tlv();
+        ptp();
         fairPlay();
         bplist();
         alac();
@@ -83,18 +83,75 @@ public final class CoreTest {
     }
 
     static void fairPlay() {
-        for (String[] v : FAIRPLAY_VECTORS) {
-            FairPlay fp = new FairPlay();
-            byte[] reply = fp.setup(Util.unhex(v[0]));
-            TestSupport.check(reply != null && reply.length == 32, "fp-setup step 2 reply");
-            TestSupport.check(Util.hex(fp.decryptKey(Util.unhex(v[1]))).equals(v[2]), "FairPlay key matches playfair");
-        }
         byte[] step1 = {0x46, 0x50, 0x4c, 0x59, 0x03, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x02, 0x00, 0x02, (byte) 0xbb};
         byte[] reply = new FairPlay().setup(step1);
         TestSupport.check(reply != null && reply.length == 142 && reply[13] == 2, "fp-setup step 1 reply for mode 2");
         byte[] wrongVersion = step1.clone();
         wrongVersion[4] = 2;
         TestSupport.check(new FairPlay().setup(wrongVersion) == null, "fp-setup rejects other versions");
+    }
+
+    static void chacha() throws Exception {
+        byte[] key = Util.unhex("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f");
+        byte[] nonce = Util.unhex("070000004041424344454647");
+        byte[] aad = Util.unhex("50515253c0c1c2c3c4c5c6c7");
+        byte[] pt = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.".getBytes(Util.UTF8);
+        byte[] sealed = ChaCha20Poly1305.seal(key, nonce, pt, 0, pt.length, aad);
+        TestSupport.check(Util.hex(Arrays.copyOfRange(sealed, pt.length, sealed.length)).equals("1ae10b594f09e26a7e902ecbd0600691"), "RFC 8439 tag");
+        TestSupport.check(Util.hex(Arrays.copyOf(sealed, 16)).equals("d31a8d34648e60db7b86afbc53ef7ec2"), "RFC 8439 ciphertext");
+        SecureRandom random = new SecureRandom();
+        for (int len : new int[] {0, 1, 63, 64, 65, 1024, 3000}) {
+            byte[] k = new byte[32], n = new byte[12], p = new byte[len], a = new byte[len % 13];
+            random.nextBytes(k); random.nextBytes(n); random.nextBytes(p); random.nextBytes(a);
+            javax.crypto.Cipher jdk = javax.crypto.Cipher.getInstance("ChaCha20-Poly1305");
+            jdk.init(javax.crypto.Cipher.ENCRYPT_MODE, new javax.crypto.spec.SecretKeySpec(k, "ChaCha20"), new javax.crypto.spec.IvParameterSpec(n));
+            if (a.length > 0) jdk.updateAAD(a);
+            byte[] expected = jdk.doFinal(p);
+            byte[] mine = ChaCha20Poly1305.seal(k, n, p, 0, len, a.length > 0 ? a : null);
+            TestSupport.check(Arrays.equals(expected, mine), "ChaCha20-Poly1305 matches the JDK at " + len + " bytes");
+            TestSupport.check(Arrays.equals(p, ChaCha20Poly1305.open(k, n, mine, 0, mine.length, a.length > 0 ? a : null)), "ChaCha20-Poly1305 opens");
+            if (len > 0) {
+                mine[0] ^= 1;
+                boolean rejected = false;
+                try {
+                    ChaCha20Poly1305.open(k, n, mine, 0, mine.length, a.length > 0 ? a : null);
+                } catch (java.security.GeneralSecurityException e) {
+                    rejected = true;
+                }
+                TestSupport.check(rejected, "ChaCha20-Poly1305 rejects tampering");
+            }
+        }
+        TestSupport.check(Util.hex(ChaCha20Poly1305.labelNonce("PS-Msg05")).equals("0000000050532d4d73673035"), "label nonce");
+        TestSupport.check(Util.hex(ChaCha20Poly1305.counterNonce(1)).equals("000000000100000000000000"), "counter nonce");
+    }
+
+    static void hkdfAndSrp() {
+        // From Python's cryptography HKDF(SHA512, 32, salt=b"Control-Salt", info=b"Control-Read-Encryption-Key").
+        TestSupport.check(Util.hex(Hkdf.sha512(Util.unhex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), "Control-Salt", "Control-Read-Encryption-Key", 32))
+                .equals("5d8f723f18a0a1179df2029373e42f2cc603a4390cab73a6a979e4a666327c15"), "HKDF-SHA512");
+        SecureRandom random = new SecureRandom();
+        Srp.Server server = new Srp.Server("3939", random);
+        Srp.Client client = new Srp.Client(random);
+        byte[] m1 = client.proof("3939", server.salt, server.publicKey());
+        byte[] m2 = server.verify(client.publicKey(), m1);
+        TestSupport.check(m2 != null && client.checkServer(m2) && Arrays.equals(client.sessionKey(), server.sessionKey()), "SRP agreement");
+        Srp.Client wrong = new Srp.Client(random);
+        Srp.Server other = new Srp.Server("3939", random);
+        TestSupport.check(other.verify(wrong.publicKey(), wrong.proof("1234", other.salt, other.publicKey())) == null, "SRP rejects a wrong PIN");
+    }
+
+    static void tlv() {
+        byte[] big = new byte[600];
+        for (int i = 0; i < big.length; i++) big[i] = (byte) i;
+        byte[] encoded = new Tlv8.Writer().add(Tlv8.STATE, 3).add(Tlv8.PUBLIC_KEY, big).add(Tlv8.PROOF, new byte[64]).bytes();
+        java.util.Map<Integer, byte[]> back = Tlv8.parse(encoded);
+        TestSupport.check(Tlv8.intValue(back, Tlv8.STATE, 0) == 3 && Arrays.equals(back.get(Tlv8.PUBLIC_KEY), big) && back.get(Tlv8.PROOF).length == 64, "TLV8 with fragments");
+    }
+
+    /** nqptp's filter: an offset estimate follows the smallest network delay and shrugs off slow packets. */
+    static void ptp() throws Exception {
+        PtpClockAccess.check();
+        TestSupport.check(BufferedSession.seqDiff(5, 0x7ffffe) == 7 && BufferedSession.seqDiff(0x7ffffe, 5) == -7, "23-bit sequence wraparound");
     }
 
     @SuppressWarnings("unchecked")
@@ -171,26 +228,24 @@ public final class CoreTest {
         return p + 8;
     }
 
-    @SuppressWarnings("unchecked")
     static void config() {
-        AirPlayConfig c = new AirPlayConfig("Kitchen", "02:11:22:33:44:55", 7000, AirPlayConfig.DEFAULT_FEATURES, false, 500);
+        AirPlayConfig c = new AirPlayConfig("Kitchen", "02:11:22:33:44:55", 7100, AirPlayConfig.DEFAULT_FEATURES);
         TestSupport.check(c.raopServiceName().equals("021122334455@Kitchen"), "RAOP service name");
-        TestSupport.check(c.featuresString().equals("0x527FDE00"), "default features");
-        TestSupport.check((c.features & (1 << 7)) == 0 && (c.features & (1 << 9)) != 0, "audio without mirroring");
-        TestSupport.check(new AirPlayConfig("K", "02:11:22:33:44:55", 7000, AirPlayConfig.DEFAULT_FEATURES, true, 500).featuresString().equals("0x5A7FDE00"), "legacy pairing bit");
-        TestSupport.check(Arrays.equals(c.publicKey, new AirPlayConfig("Other", "021122334455", 7001, 0, false, 100).publicKey), "identity follows the device ID");
+        TestSupport.check(c.featuresString().equals("0x401FCA00,0x1C340"), "features as shairport-sync advertises them");
+        TestSupport.check(c.featuresEx().equals("AMofQEDDAQA"), "fex");
+        TestSupport.check((c.features & (1L << 40)) != 0 && (c.features & (1L << 41)) != 0 && (c.features & (1L << 46)) != 0, "buffered audio, PTP and HomeKit pairing bits");
+        TestSupport.check(Arrays.equals(c.publicKey, new AirPlayConfig("Other", "021122334455", 7001, 0).publicKey), "identity follows the device ID");
         TestSupport.check(AirPlayConfig.parseFeatures("0x5A7FFEE6,0x1", 0) == 0x15A7FFEE6L, "features with high word");
         TestSupport.check(AirPlayConfig.parseFeatures("junk", 7) == 7, "bad features fall back");
-        TestSupport.check(!AirPlayConfig.validDeviceId("") && !AirPlayConfig.validDeviceId("hello") && AirPlayConfig.validDeviceId(AirPlayConfig.randomDeviceId(new SecureRandom())), "device ID validation");
-        Map<String, Object> info = c.info(null, true, -12);
-        TestSupport.check("Kitchen".equals(info.get("name")) && info.containsKey("audioFormats") && !info.containsKey("displays"), "/info contents");
-        TestSupport.check(c.info("txtAirPlay", false, 0).get("txtAirPlay") instanceof byte[], "/info qualifier");
-        TestSupport.check("Kiosk Satellite".equals(new AirPlayConfig(" ", "02:11:22:33:44:55", 7000, 0, false, 500).name), "default name");
+        TestSupport.check(!AirPlayConfig.validDeviceId("") && AirPlayConfig.validDeviceId(AirPlayConfig.randomDeviceId(new SecureRandom())), "device ID validation");
+        java.util.Map<String, Object> info = c.info(null, "1.2.3.4:5", -12, null, false);
+        TestSupport.check("Kitchen".equals(info.get("name")) && info.get("supportedFormats") instanceof java.util.Map, "/info contents");
+        TestSupport.check(c.info("txtAirPlay", null, 0, null, false).get("txtAirPlay") instanceof byte[], "/info qualifier");
+        TestSupport.check(c.airplayTxt("G1", true).get("gid").equals("G1") && c.airplayTxt(null, false).get("gid").equals(c.pi), "group ID in TXT");
     }
 
     static void gain() {
-        TestSupport.check(AudioSession.gainForVolume(-144) == 0f && AudioSession.gainForVolume(0) == 1f, "volume ends");
-        TestSupport.check(Math.abs(AudioSession.gainForVolume(-15) - 0.25f) < 1e-6, "volume curve");
-        TestSupport.check(AudioSession.seqDiff(2, 65534) == 4 && AudioSession.seqDiff(65534, 2) == -4, "sequence wraparound");
+        TestSupport.check(AudioCurve.gain(-144) == 0f && AudioCurve.gain(0) == 1f, "volume ends");
+        TestSupport.check(Math.abs(AudioCurve.gain(-15) - 0.25f) < 1e-6 && AudioCurve.percent(-15) == 50, "volume curve");
     }
 }

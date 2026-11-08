@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package ks.airplay;
 
-import java.io.InputStream;
 import java.security.SecureRandom;
 import java.util.Collections;
 import java.util.HashMap;
@@ -17,7 +16,7 @@ import java.util.concurrent.TimeUnit;
 import ks.airplay.android.AndroidPlatform;
 import ks.airplay.android.Bonjour;
 import ks.airplay.android.NowPlayingCard;
-import ks.airplay.fairplay.FairPlayTables;
+import ks.airplay.ptp.PtpClock;
 import me.jxl.kiosk.plugins.KioskPlugin;
 import me.jxl.kiosk.plugins.OverlaySpec;
 import me.jxl.kiosk.plugins.PluginHost;
@@ -49,47 +48,69 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     private ScheduledFuture<?> hideCard;
     private String lastCardTitle;
     private float duck = 1f;
+    private PtpClock ptp;
+    private boolean redirected, ptpStarting;
+    private String syncState = "";
+    private ScheduledFuture<?> syncRefresh;
+
+    static final int REDIRECT_OFFSET = 10000;
+    /** Adds iptables redirects for PTP (319, 320) to ports an app may open. Run as root through Shizuku. */
+    static final String REDIRECT_ADD = redirectScript("-C", "-I");
+    static final String REDIRECT_REMOVE = redirectScript(null, "-D");
+
+    static String redirectScript(String check, String action) {
+        StringBuilder sb = new StringBuilder("r=0; ");
+        for (String tool : new String[] {"/system/bin/iptables", "/system/bin/ip6tables"}) {
+            for (int port : new int[] {319, 320}) {
+                String rule = " -w -t nat %s PREROUTING -p udp --dport " + port + " -j REDIRECT --to-ports " + (port + REDIRECT_OFFSET);
+                if (check != null) {
+                    sb.append(tool).append(String.format(rule, check)).append(" 2>/dev/null || ")
+                      .append(tool).append(String.format(rule, action)).append(" || { echo '").append(tool).append(' ').append(port)
+                      .append(" failed'; ").append(tool.endsWith("/iptables") ? "r=1; " : "").append("}; ");
+                } else {
+                    sb.append("while ").append(tool).append(String.format(rule, action)).append(" 2>/dev/null; do :; done; ");
+                }
+            }
+        }
+        return sb.append("exit $r").toString();
+    }
 
     /** Validated settings with defaults. */
     static final class Settings {
         String name = "";
-        int bufferMs = 500;
         boolean duckVoice = true;
         int duckLevel = 20;
         boolean wakeScreen = false;
         String nowPlaying = "On track change";
         String position = "Bottom";
-        int port = 7000;
+        int port = 7100;
         String deviceId = "";
-        boolean legacyPairing = false;
         String features = "";
 
         static Settings from(Map<String, Object> map) {
             Settings s = new Settings();
             if (map == null) return s;
             s.name = string(map, "name", s.name).trim();
-            s.bufferMs = (int) Math.round(number(map, "bufferMs", s.bufferMs));
             s.duckVoice = bool(map, "duckVoice", s.duckVoice);
             s.duckLevel = (int) Math.round(number(map, "duckLevel", s.duckLevel));
             s.wakeScreen = bool(map, "wakeScreen", s.wakeScreen);
             s.nowPlaying = string(map, "nowPlaying", s.nowPlaying);
             s.position = string(map, "position", s.position);
             try {
-                int p = Integer.parseInt(string(map, "port", "7000").trim());
-                s.port = p >= 1024 && p <= 65535 ? p : 7000;
+                int p = Integer.parseInt(string(map, "port", "7100").trim());
+                s.port = p >= 1024 && p <= 65535 ? p : 7100;
             } catch (NumberFormatException e) {
-                s.port = 7000;
+                s.port = 7100;
             }
             s.deviceId = string(map, "deviceId", "").trim();
-            s.legacyPairing = bool(map, "legacyPairing", s.legacyPairing);
             s.features = string(map, "features", "").trim();
             return s;
         }
 
         /** True when a change needs the receiver to restart and re-advertise. */
         boolean needsRestart(Settings o) {
-            return o == null || !name.equals(o.name) || bufferMs != o.bufferMs || port != o.port
-                    || !deviceId.equalsIgnoreCase(o.deviceId) || legacyPairing != o.legacyPairing || !features.equals(o.features);
+            return o == null || !name.equals(o.name) || port != o.port || !deviceId.equalsIgnoreCase(o.deviceId)
+                    || !features.equals(o.features);
         }
 
         private static String string(Map<String, Object> m, String k, String d) {
@@ -133,14 +154,6 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             platform = new AndroidPlatform(new AndroidPlatform.Logger() {
                 @Override public void log(String message) { AirPlayPlugin.this.log(message); }
             });
-        }
-        if (!FairPlayTables.loaded()) {
-            InputStream in = host.openAsset("fairplay.bin");
-            try {
-                FairPlayTables.load(in);
-            } finally {
-                in.close();
-            }
         }
         settings = Settings.from(raw);
         publishEntities();
@@ -191,13 +204,19 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                     applyDuck();
                 }
             });
+        } else if ("shizuku.state".equals(event)) {
+            post(new Runnable() { @Override public void run() { if (receiverOn && server != null && ptp == null) startPtp(); } });
         } else if ("switch.receiver".equals(event)) {
             final boolean on = payload != null && Boolean.TRUE.equals(payload.get("on"));
             post(new Runnable() {
                 @Override public void run() {
                     receiverOn = on;
-                    if (on) startReceiver();
-                    else stopReceiver("Receiver turned off");
+                    if (on) {
+                        startReceiver();
+                    } else {
+                        stopReceiver("Receiver turned off");
+                        stopPtp();
+                    }
                     safe(new Runnable() { @Override public void run() { host.publishSwitch("receiver", "AirPlay receiver", receiverOn); } });
                 }
             });
@@ -211,6 +230,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         w.submit(new Runnable() {
             @Override public void run() {
                 stopReceiver(null);
+                stopPtp();
                 hideCardNow();
             }
         });
@@ -276,11 +296,12 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         if (!AirPlayConfig.validDeviceId(s.deviceId)) return;
         try {
             long features = AirPlayConfig.parseFeatures(s.features, AirPlayConfig.DEFAULT_FEATURES);
-            config = new AirPlayConfig(resolvedName != null ? resolvedName : s.name, s.deviceId, s.port, features, s.legacyPairing, s.bufferMs);
+            config = new AirPlayConfig(resolvedName != null ? resolvedName : s.name, s.deviceId, s.port, features);
             AirPlayServer next = new AirPlayServer(config, platform, this);
             next.start();
             server = next;
             applyDuck();
+            if (ptp != null) next.setClock(clockFor(ptp));
         } catch (Exception e) {
             server = null;
             String message = e instanceof java.net.BindException ? "Port " + s.port + " is in use. Pick another port under Advanced." : "Could not start: " + e.getMessage();
@@ -293,6 +314,124 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             status("Ready as \"" + config.name + "\"", false);
             tile("", "Ready as " + config.name);
         }
+        if (ptp == null) startPtp();
+    }
+
+    // ---------------------------------------------------------------- PTP and root (worker thread)
+
+    private static BufferedSession.Clock clockFor(final PtpClock clock) {
+        return new BufferedSession.Clock() {
+            @Override public Long offset(long timelineId) { return clock.offset(timelineId); }
+        };
+    }
+
+    /**
+     * Multi-room needs the sender's PTP clock on UDP 319 and 320. Use them directly if this device lets apps bind
+     * them, otherwise redirect them with iptables through Shizuku running as root.
+     */
+    private void startPtp() {
+        if (ptp != null || ptpStarting) return;
+        PtpClock direct = new PtpClock(ptpLog(), 319, 320);
+        try {
+            direct.start();
+            usePtp(direct, "on ports 319 and 320");
+            return;
+        } catch (java.io.IOException ignored) {
+            // normal without root
+        }
+        Map<String, Object> state;
+        try {
+            state = host.shizukuState();
+        } catch (RuntimeException e) {
+            sync("Multi-room off: Shizuku is unavailable (" + e.getMessage() + ")");
+            return;
+        }
+        Object uid = state == null ? null : state.get("uid");
+        if (!Boolean.TRUE.equals(state == null ? null : state.get("granted")) || !(uid instanceof Number) || ((Number) uid).intValue() != 0) {
+            sync("Multi-room off: start Shizuku as root and give Kiosk Satellite access (status "
+                    + (state == null ? "unknown" : state.get("status")) + ", uid " + uid + ")");
+            return;
+        }
+        ptpStarting = true;
+        try {
+            host.executeShizuku(new String[] {"/system/bin/sh", "-c", REDIRECT_ADD}, 15000, new PluginHost.CommandCallback() {
+                @Override public void onResult(final boolean ok, final Object data, final String error) {
+                    post(new Runnable() { @Override public void run() { redirectDone(ok, data, error); } });
+                }
+            });
+        } catch (RuntimeException e) {
+            ptpStarting = false;
+            sync("Multi-room off: could not run the port redirect (" + e.getMessage() + ")");
+        }
+    }
+
+    private void redirectDone(boolean ok, Object data, String error) {
+        ptpStarting = false;
+        Map<?, ?> result = data instanceof Map ? (Map<?, ?>) data : null;
+        Object exit = result == null ? null : result.get("exitCode");
+        if (!ok || !(exit instanceof Number) || ((Number) exit).intValue() != 0) {
+            String detail = ok ? String.valueOf(result == null ? null : result.get("stdout")).trim() + " " + String.valueOf(result == null ? null : result.get("stderr")).trim() : error;
+            sync("Multi-room off: the iptables redirect failed: " + detail);
+            return;
+        }
+        String out = result.get("stdout") == null ? "" : String.valueOf(result.get("stdout")).trim();
+        if (!out.isEmpty()) log("Port redirect: " + out); // IPv6 can fail where IPv4 works
+        redirected = true;
+        PtpClock clock = new PtpClock(ptpLog(), 319 + REDIRECT_OFFSET, 320 + REDIRECT_OFFSET);
+        try {
+            clock.start();
+            usePtp(clock, "through redirected ports " + (319 + REDIRECT_OFFSET) + " and " + (320 + REDIRECT_OFFSET));
+        } catch (java.io.IOException e) {
+            sync("Multi-room off: could not open the redirected PTP ports: " + e.getMessage());
+        }
+    }
+
+    private void usePtp(PtpClock clock, String how) {
+        ptp = clock;
+        AirPlayServer s = server;
+        if (s != null) s.setClock(clockFor(clock));
+        log("PTP listening " + how);
+        sync("Multi-room ready (PTP " + how + ")");
+        if (syncRefresh != null) syncRefresh.cancel(false);
+        syncRefresh = worker.scheduleWithFixedDelay(new Runnable() {
+            @Override public void run() {
+                PtpClock c = ptp;
+                if (c != null) sync("Multi-room ready, " + c.describe());
+            }
+        }, 15, 15, TimeUnit.SECONDS);
+    }
+
+    private void stopPtp() {
+        if (syncRefresh != null) {
+            syncRefresh.cancel(false);
+            syncRefresh = null;
+        }
+        PtpClock c = ptp;
+        ptp = null;
+        AirPlayServer s = server;
+        if (s != null) s.setClock(null);
+        if (c != null) c.stop();
+        if (redirected) {
+            redirected = false;
+            try {
+                host.executeShizuku(new String[] {"/system/bin/sh", "-c", REDIRECT_REMOVE}, 15000, new PluginHost.CommandCallback() {
+                    @Override public void onResult(boolean ok, Object data, String error) {}
+                });
+            } catch (RuntimeException ignored) {
+                // stopping; the rules only point at ports nothing else uses
+            }
+        }
+    }
+
+    private PtpClock.Log ptpLog() {
+        return new PtpClock.Log() { @Override public void log(String message) { AirPlayPlugin.this.log(message); } };
+    }
+
+    private void sync(final String text) {
+        if (text.equals(syncState)) return;
+        syncState = text;
+        safe(new Runnable() { @Override public void run() { host.publishTextSensor("sync", "AirPlay multi-room", text); } });
+        if (text.startsWith("Multi-room off")) log(text);
     }
 
     /** Register the Bonjour services. False when this device cannot advertise at all. */
@@ -311,7 +450,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                     });
                 }
             };
-            bonjour.register("_airplay._tcp", config.name, config.port, config.airplayTxt(), callback);
+            bonjour.register("_airplay._tcp", config.name, config.port, config.airplayTxt(null, false), callback);
             bonjour.register("_raop._tcp", config.raopServiceName(), config.port, config.raopTxt(), callback);
             return true;
         } catch (Throwable e) {
@@ -365,7 +504,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
 
     @Override public void onStreamStarted(final String clientName, final int ct) {
         post(new Runnable() { @Override public void run() {
-            codec = ct == 2 ? "ALAC" : ct == 4 ? "AAC" : ct == 8 ? "AAC-ELD" : "codec " + ct;
+            codec = ct == 2 ? "ALAC" : ct == 4 ? "AAC" : "codec " + ct;
             status("Streaming from " + clientName + " (" + codec + ")", false);
         } });
     }
@@ -440,6 +579,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             host.publishTextSensor("source", "AirPlay source", "");
             host.publishSensor("volume", "AirPlay volume", volumeMeta(), null);
             host.publishSwitch("receiver", "AirPlay receiver", true);
+            host.publishTextSensor("sync", "AirPlay multi-room", "Starting");
         } });
     }
 

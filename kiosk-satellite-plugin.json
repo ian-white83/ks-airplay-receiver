@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "id": "airplay-receiver",
-  "name": "AirPlay Receiver",
-  "version": "0.1.0",
+  "id": "airplay2-multiroom",
+  "name": "AirPlay 2 Multi-Room",
+  "version": "0.2.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
   "entryClass": "ks.airplay.AirPlayPlugin",
-  "description": "Turns the kiosk into an AirPlay speaker. Play music and audio from an iPhone, iPad or Mac to Kiosk Satellite, with volume control, track info, cover art and a Now Playing card. Publishes playback state to Home Assistant and lowers AirPlay audio while the voice assistant talks. Audio only: screen mirroring and AirPlay 2 multi-room are not supported. Not affiliated with Apple.",
+  "description": "Turns the kiosk into an AirPlay 2 speaker that groups with HomePods and other AirPlay 2 speakers for multi-room audio from an iPhone, iPad or Mac. Follows the sender's clock over PTP, which needs Shizuku running as root. Shows track info and cover art, publishes playback to Home Assistant and lowers audio while the voice assistant talks. Audio only. Not affiliated with Apple.",
   "author": "Ian White",
   "license": "GPL-3.0-or-later",
   "headless": true,
@@ -15,7 +15,8 @@
     "overlay",
     "entities",
     "host.read",
-    "host.control"
+    "host.control",
+    "shizuku"
   ],
   "icon": "icon.png",
   "settings": [
@@ -26,18 +27,6 @@
       "default": "",
       "group": "Receiver",
       "description": "The name shown in the AirPlay menu on your iPhone, iPad or Mac. Leave empty to use this kiosk's device name."
-    },
-    {
-      "key": "bufferMs",
-      "type": "number",
-      "title": "Audio buffer",
-      "default": 500,
-      "min": 100,
-      "max": 2000,
-      "step": 50,
-      "unit": "ms",
-      "group": "Playback",
-      "description": "How much audio to hold before playing. Raise it if playback stutters on a weak Wi-Fi connection."
     },
     {
       "key": "duckVoice",
@@ -57,7 +46,10 @@
       "step": 5,
       "unit": "%",
       "group": "Playback",
-      "visibleWhen": { "key": "duckVoice", "equals": true }
+      "visibleWhen": {
+        "key": "duckVoice",
+        "equals": true
+      }
     },
     {
       "key": "wakeScreen",
@@ -72,7 +64,11 @@
       "type": "select",
       "title": "Now Playing card",
       "default": "On track change",
-      "options": ["Off", "On track change", "While playing"],
+      "options": [
+        "Off",
+        "On track change",
+        "While playing"
+      ],
       "group": "Now Playing",
       "description": "Show the track, artist and cover art over the dashboard: for a few seconds when the track changes, or for as long as audio plays."
     },
@@ -81,17 +77,23 @@
       "type": "select",
       "title": "Card position",
       "default": "Bottom",
-      "options": ["Bottom", "Top"],
+      "options": [
+        "Bottom",
+        "Top"
+      ],
       "group": "Now Playing",
-      "visibleWhen": { "key": "nowPlaying", "notEquals": "Off" }
+      "visibleWhen": {
+        "key": "nowPlaying",
+        "notEquals": "Off"
+      }
     },
     {
       "key": "port",
       "type": "string",
       "title": "Port",
-      "default": "7000",
+      "default": "7100",
       "group": "Advanced",
-      "description": "TCP port for AirPlay connections, 1024 to 65535. Change it only if another app already uses 7000."
+      "description": "TCP port for AirPlay connections, 1024 to 65535. The default keeps clear of Kiosk Satellite's own AirPlay receiver."
     },
     {
       "key": "deviceId",
@@ -102,31 +104,41 @@
       "description": "Generated on first start. Clear it to make Apple devices see this kiosk as a new speaker."
     },
     {
-      "key": "legacyPairing",
-      "type": "boolean",
-      "title": "Legacy pairing",
-      "default": false,
-      "group": "Advanced",
-      "description": "Ask senders to pair before streaming. Off connects faster. Turn it on only if a sender refuses to connect."
-    },
-    {
       "key": "features",
       "type": "string",
       "title": "Feature flags",
       "default": "",
       "group": "Advanced",
-      "description": "For troubleshooting only. Leave empty for the audio-only default (0x527FDE00). See the README."
+      "description": "For troubleshooting only. Leave empty for the default (0x401FCA00,0x1C340, as shairport-sync advertises). See the README."
     }
   ],
   "commands": [
-    { "id": "disconnect", "title": "Disconnect AirPlay sender" },
-    { "id": "restart", "title": "Restart AirPlay receiver" }
+    {
+      "id": "disconnect",
+      "title": "Disconnect AirPlay sender"
+    },
+    {
+      "id": "restart",
+      "title": "Restart AirPlay receiver"
+    }
   ],
   "triggers": [
-    { "id": "playbackStarted", "title": "AirPlay playback started" },
-    { "id": "playbackStopped", "title": "AirPlay playback stopped" }
+    {
+      "id": "playbackStarted",
+      "title": "AirPlay playback started"
+    },
+    {
+      "id": "playbackStopped",
+      "title": "AirPlay playback stopped"
+    }
   ],
   "groups": [
-    { "title": "Receiver", "readingsTitle": "Now playing", "readings": ["*"] }
+    {
+      "title": "Receiver",
+      "readingsTitle": "Now playing",
+      "readings": [
+        "*"
+      ]
+    }
   ]
 }
