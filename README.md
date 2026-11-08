@@ -27,7 +27,7 @@ Or search for `AirPlay 2 Multi-Room` in **Settings > Plugin Manager > Browse plu
 ### Manual
 
 1. Open **Settings > Plugin Manager** in Kiosk Satellite and turn on **Enable Plugins**.
-2. Choose **Add plugin**, paste `https://github.com/OWNER/ks-airplay-receiver` and choose **Preview**.
+2. Choose **Add plugin**, paste `https://github.com/ian-white83/ks-airplay-receiver` and choose **Preview**.
 3. Review the plugin and choose **Trust and install**.
 
 ### Give it root through Shizuku
