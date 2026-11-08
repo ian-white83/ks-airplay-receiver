@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "id": "airplay-receiver",
+  "name": "AirPlay Receiver",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "minAndroidSdk": 24,
+  "minAppVersion": "2026.10.45",
+  "entryClass": "ks.airplay.AirPlayPlugin",
+  "description": "Turns the kiosk into an AirPlay speaker. Play music and audio from an iPhone, iPad or Mac to Kiosk Satellite, with volume control, track info, cover art and a Now Playing card. Publishes playback state to Home Assistant and lowers AirPlay audio while the voice assistant talks. Audio only: screen mirroring and AirPlay 2 multi-room are not supported. Not affiliated with Apple.",
+  "author": "Ian White",
+  "license": "GPL-3.0-or-later",
+  "headless": true,
+  "capabilities": [
+    "overlay",
+    "entities",
+    "host.read",
+    "host.control"
+  ],
+  "icon": "icon.png",
+  "settings": [
+    {
+      "key": "name",
+      "type": "string",
+      "title": "Speaker name",
+      "default": "",
+      "group": "Receiver",
+      "description": "The name shown in the AirPlay menu on your iPhone, iPad or Mac. Leave empty to use this kiosk's device name."
+    },
+    {
+      "key": "bufferMs",
+      "type": "number",
+      "title": "Audio buffer",
+      "default": 500,
+      "min": 100,
+      "max": 2000,
+      "step": 50,
+      "unit": "ms",
+      "group": "Playback",
+      "description": "How much audio to hold before playing. Raise it if playback stutters on a weak Wi-Fi connection."
+    },
+    {
+      "key": "duckVoice",
+      "type": "boolean",
+      "title": "Lower AirPlay while the assistant talks",
+      "default": true,
+      "group": "Playback",
+      "description": "Turn AirPlay audio down while Voice Satellite listens and answers."
+    },
+    {
+      "key": "duckLevel",
+      "type": "number",
+      "title": "Lowered volume",
+      "default": 20,
+      "min": 0,
+      "max": 100,
+      "step": 5,
+      "unit": "%",
+      "group": "Playback",
+      "visibleWhen": { "key": "duckVoice", "equals": true }
+    },
+    {
+      "key": "wakeScreen",
+      "type": "boolean",
+      "title": "Wake the screen when playback starts",
+      "default": false,
+      "group": "Playback",
+      "description": "Dismiss the screensaver and turn the display on when AirPlay audio starts."
+    },
+    {
+      "key": "nowPlaying",
+      "type": "select",
+      "title": "Now Playing card",
+      "default": "On track change",
+      "options": ["Off", "On track change", "While playing"],
+      "group": "Now Playing",
+      "description": "Show the track, artist and cover art over the dashboard: for a few seconds when the track changes, or for as long as audio plays."
+    },
+    {
+      "key": "position",
+      "type": "select",
+      "title": "Card position",
+      "default": "Bottom",
+      "options": ["Bottom", "Top"],
+      "group": "Now Playing",
+      "visibleWhen": { "key": "nowPlaying", "notEquals": "Off" }
+    },
+    {
+      "key": "port",
+      "type": "string",
+      "title": "Port",
+      "default": "7000",
+      "group": "Advanced",
+      "description": "TCP port for AirPlay connections, 1024 to 65535. Change it only if another app already uses 7000."
+    },
+    {
+      "key": "deviceId",
+      "type": "string",
+      "title": "AirPlay device ID",
+      "default": "",
+      "group": "Advanced",
+      "description": "Generated on first start. Clear it to make Apple devices see this kiosk as a new speaker."
+    },
+    {
+      "key": "legacyPairing",
+      "type": "boolean",
+      "title": "Legacy pairing",
+      "default": false,
+      "group": "Advanced",
+      "description": "Ask senders to pair before streaming. Off connects faster. Turn it on only if a sender refuses to connect."
+    },
+    {
+      "key": "features",
+      "type": "string",
+      "title": "Feature flags",
+      "default": "",
+      "group": "Advanced",
+      "description": "For troubleshooting only. Leave empty for the audio-only default (0x527FDE00). See the README."
+    }
+  ],
+  "commands": [
+    { "id": "disconnect", "title": "Disconnect AirPlay sender" },
+    { "id": "restart", "title": "Restart AirPlay receiver" }
+  ],
+  "triggers": [
+    { "id": "playbackStarted", "title": "AirPlay playback started" },
+    { "id": "playbackStopped", "title": "AirPlay playback stopped" }
+  ],
+  "groups": [
+    { "title": "Receiver", "readingsTitle": "Now playing", "readings": ["*"] }
+  ]
+}
