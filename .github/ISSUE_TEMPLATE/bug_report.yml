@@ -1,0 +1,64 @@
+name: Bug report
+description: Something doesn't work, or works differently from the README
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For a security problem, use [private reporting](https://github.com/ian-white83/ks-airplay-receiver/security) instead of this form.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+      placeholder: Grouped the kitchen Echo Show with a HomePod mini from Control Center. Audio on the Show is about half a second behind.
+    validations:
+      required: true
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin version
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: ks
+    attributes:
+      label: Kiosk Satellite version
+      placeholder: "2026.11.3"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
+      placeholder: Echo Show 8 (1st gen), LineageOS 18.1
+    validations:
+      required: true
+  - type: input
+    id: sender
+    attributes:
+      label: Sender
+      description: The device playing to the kiosk, and what else is in the group.
+      placeholder: iPhone 15, iOS 26.1, grouped with a HomePod mini
+  - type: input
+    id: sync
+    attributes:
+      label: AirPlay multi-room reading
+      description: From the plugin's page in Plugin Manager.
+      placeholder: Multi-room ready, 1a2b3c4d5e6f7a8b (240 samples)
+  - type: dropdown
+    id: shizuku
+    attributes:
+      label: Shizuku
+      options:
+        - Running as root
+        - Running as shell (not root)
+        - Not running or not installed
+        - Not sure
+  - type: textarea
+    id: log
+    attributes:
+      label: Plugin log
+      description: From the plugin's page in Plugin Manager. Copy the part around the problem.
+      render: text

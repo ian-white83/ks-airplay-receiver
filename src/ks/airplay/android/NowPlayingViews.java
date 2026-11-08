@@ -183,6 +183,8 @@ public final class NowPlayingViews {
             chip.setText((np.playing ? "AirPlay" : "Paused") + (np.source.isEmpty() || np.title.isEmpty() ? "" : " · " + np.source));
             if (artChanged) setArt(cover, np.artwork, theme.px(60), theme, "onSurfaceVariant");
             progress.setVisibility(np.hasProgress() ? View.VISIBLE : View.GONE);
+            cover.setContentDescription(artDescription(np));
+            root.setContentDescription(spoken(np) + ". Opens the full-screen Now Playing view.");
         }
 
         @Override void tick(NowPlaying np) {
@@ -274,6 +276,7 @@ public final class NowPlayingViews {
             boolean hasProgress = np.hasProgress();
             progress.setVisibility(hasProgress ? View.VISIBLE : View.GONE);
             progressRow.setVisibility(hasProgress ? View.VISIBLE : View.GONE);
+            cover.setContentDescription(artDescription(np));
         }
 
         @Override void tick(NowPlaying np) {
@@ -286,6 +289,20 @@ public final class NowPlayingViews {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /** What TalkBack reads for the player: state, track and artist. */
+    static String spoken(NowPlaying np) {
+        StringBuilder sb = new StringBuilder(np.playing ? "Playing on AirPlay" : "AirPlay paused");
+        if (!np.title.isEmpty()) sb.append(": ").append(np.title);
+        if (!np.artist.isEmpty()) sb.append(" by ").append(np.artist);
+        if (np.title.isEmpty() && !np.source.isEmpty()) sb.append(" from ").append(np.source);
+        return sb.toString();
+    }
+
+    static String artDescription(NowPlaying np) {
+        if (np.artwork == null) return "No cover art";
+        return np.album.isEmpty() ? "Cover art" : "Cover art for " + np.album;
+    }
 
     private static ImageView roundedImage(Context context, final int radius) {
         ImageView image = new ImageView(context);

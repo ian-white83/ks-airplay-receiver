@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest something new or a change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What do you want to do?
+      description: The goal, not only the change. That leaves room for a simpler way to get there.
+      placeholder: Line up AirPlay audio on the Show with video playing on the iPhone.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could it work?
+      description: Optional. A setting, an entity, an action or a change in behaviour.
+  - type: textarea
+    id: context
+    attributes:
+      label: Devices and setup
+      description: Optional. The kiosk devices, senders and other speakers this matters for.
