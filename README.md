@@ -4,6 +4,8 @@ Turns a [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) kiosk int
 
 Kiosk Satellite already has its own AirPlay receiver for single-speaker playback. This plugin adds what that receiver doesn't: AirPlay 2 buffered audio locked to the sender's clock, so the kiosk can be part of a group.
 
+> **Turn off Kiosk Satellite's own AirPlay receiver.** If both run, the kiosk shows up twice in the AirPlay menu, and only this plugin's entry can join a group. In Kiosk Satellite, open **Settings > Media Player > AirPlay** and turn off **Enable AirPlay receiver**. That section only shows while **AirPlay** is the picked **Player**; if it isn't, the built-in receiver is already off.
+
 - Groups with other AirPlay 2 speakers for multi-room audio.
 - Follows the sender's volume slider.
 - Shows what's playing: a floating player over the dashboard, and a full-screen Now Playing view with large cover art that takes over from the screensaver while AirPlay plays.
@@ -104,6 +106,8 @@ Open Shizuku: it should say **Shizuku is running** with **root** as the user. Ro
 ### 6. Install the plugin
 
 Install it from Community Plugins or by URL, as in [Installation](#installation).
+
+Then turn off Kiosk Satellite's own AirPlay receiver, so the kiosk doesn't show up twice in the AirPlay menu: **Settings > Media Player > AirPlay > Enable AirPlay receiver** off. If **AirPlay** isn't the picked **Player** under **Settings > Media Player**, it's already off.
 
 ### 7. Give Kiosk Satellite access to Shizuku
 
@@ -243,6 +247,7 @@ Check the **Shizuku** status and the **AirPlay multi-room** reading on the plugi
 - **"start Shizuku as root…"** Shizuku isn't running, KS has no access, or Shizuku is running as shell (uid 2000) rather than root (uid 0).
 - **"the iptables redirect failed"** The reading includes the error. IPv6 failures alone are only logged. Most senders time over IPv4.
 - **"Multi-room ready, no clock yet"** The redirect is in place but no PTP traffic has arrived. Clocks appear once a sender starts playing to a group that includes the kiosk. Check that multicast and UDP between the phone and the kiosk aren't blocked, for example by Wi-Fi client isolation or a separate VLAN.
+- **The kiosk shows up twice in the AirPlay menu.** Kiosk Satellite's own AirPlay 1 receiver is still on. Turn off **Settings > Media Player > AirPlay > Enable AirPlay receiver**. Only this plugin's entry can join a group.
 - **The kiosk is not in the AirPlay menu.** The phone and the kiosk must be on the same network with mDNS allowed. "Bonjour is unavailable" in the status line means the device could not advertise.
 - **Audio plays but drifts from the other speakers.** Send me the plugin log from Plugin Manager. It shows the clock offset and the playout corrections.
 

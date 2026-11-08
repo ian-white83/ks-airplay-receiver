@@ -3,6 +3,7 @@
 ## 0.4.2
 
 - The Shizuku button now says **Started** while Shizuku runs as root, and **Start** when it doesn't. Tapping **Started** checks that the boot start can still reach ADB. The status reading stays below it.
+- Turn off Kiosk Satellite's own AirPlay receiver (**Settings > Media Player > AirPlay > Enable AirPlay receiver**), otherwise the kiosk shows up twice in the AirPlay menu.
 
 ## 0.4.1
 
