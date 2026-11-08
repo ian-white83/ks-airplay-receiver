@@ -43,6 +43,7 @@ public final class AirPlayServer {
     private volatile double volumeDb = -12.0;
     private volatile float duck = 1f;
     private volatile BufferedSession.Clock clock;
+    private volatile long offsetNanos;
 
     public AirPlayServer(AirPlayConfig config, Platform platform, Listener listener) {
         this.config = config;
@@ -143,6 +144,17 @@ public final class AirPlayServer {
         volumeDb = db;
         listener.onVolume(db);
     }
+
+    /** Audio offset for this and later streams: positive plays later, negative earlier. */
+    public void setOffset(long nanos) {
+        offsetNanos = nanos;
+        RtspConnection c;
+        synchronized (this) { c = active; }
+        BufferedSession s = c == null ? null : c.session();
+        if (s != null) s.setOffset(nanos);
+    }
+
+    long offsetNanos() { return offsetNanos; }
 
     /** Attenuate playback while the voice assistant talks: 1 is normal. */
     public void setDuck(float gain) {

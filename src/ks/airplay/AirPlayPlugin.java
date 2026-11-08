@@ -80,6 +80,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         String name = "";
         boolean duckVoice = true;
         int duckLevel = 20;
+        double audioOffset = 0;
         boolean wakeScreen = false;
         String nowPlaying = "On track change";
         String position = "Bottom";
@@ -93,6 +94,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             s.name = string(map, "name", s.name).trim();
             s.duckVoice = bool(map, "duckVoice", s.duckVoice);
             s.duckLevel = (int) Math.round(number(map, "duckLevel", s.duckLevel));
+            s.audioOffset = Math.max(-3.0, Math.min(3.0, number(map, "audioOffset", 0)));
             s.wakeScreen = bool(map, "wakeScreen", s.wakeScreen);
             s.nowPlaying = string(map, "nowPlaying", s.nowPlaying);
             s.position = string(map, "position", s.position);
@@ -180,7 +182,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             if (!next.name.equals(previous == null ? null : previous.name)) resolvedName = null;
             resolveNameAndStart();
         } else {
-            post(new Runnable() { @Override public void run() { applyDuck(); refreshCard(true); } });
+            post(new Runnable() { @Override public void run() { applyDuck(); applyOffset(); refreshCard(true); } });
         }
     }
 
@@ -301,6 +303,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             next.start();
             server = next;
             applyDuck();
+            applyOffset();
             if (ptp != null) next.setClock(clockFor(ptp));
         } catch (Exception e) {
             server = null;
@@ -472,6 +475,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             status(why, false);
             tile("off", why);
         }
+    }
+
+    private void applyOffset() {
+        AirPlayServer s = server;
+        if (s != null) s.setOffset(Math.round(settings.audioOffset * 1_000_000_000L));
     }
 
     private void applyDuck() {

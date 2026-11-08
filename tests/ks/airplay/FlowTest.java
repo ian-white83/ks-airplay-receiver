@@ -287,7 +287,7 @@ public final class FlowTest {
 
     @SuppressWarnings("unchecked")
     static void session(boolean laggy) throws Exception {
-        System.out.println(laggy ? " with a decoder that lags like AAC:" : " with ALAC:");
+        System.out.println(laggy ? " with a decoder that lags like AAC, and a +0.25 s audio offset:" : " with ALAC:");
         FakePlatform platform = new FakePlatform();
         platform.laggyDecoder = laggy;
         Events events = new Events();
@@ -298,6 +298,8 @@ public final class FlowTest {
         AirPlayServer server = new AirPlayServer(config, platform, events);
         server.setClock(new BufferedSession.Clock() { @Override public Long offset(long id) { return ptp.offset(id); } });
         int port = server.start();
+        long shift = laggy ? 250_000_000L : 0; // the second run also checks the audio offset setting
+        server.setOffset(shift);
         try {
             Client client = new Client(port);
             Map<String, Object> info = client.plist("GET", "/info", null);
@@ -353,7 +355,7 @@ public final class FlowTest {
             int first = firstSound(got);
             TestSupport.check(first >= 0, "audio arrived");
             long heard = platform.playTime(first / 2);
-            long due = anchorMaster - MASTER_OFFSET;
+            long due = anchorMaster - MASTER_OFFSET + shift;
             System.out.println("  first frame timing error: " + (heard - due) / 1000 + " us");
             TestSupport.check(Math.abs(heard - due) < 10_000_000L, "first frame heard on time: off by " + (heard - due) / 1000 + " us");
             int mismatched = 0;
@@ -380,9 +382,9 @@ public final class FlowTest {
             for (int i = before; i < after.length; i++) if (after[i] != 0) { resumed = i - (i % 2); break; }
             TestSupport.check(resumed >= 0, "audio resumed");
             long resumeHeard = platform.playTime(resumed / 2);
-            System.out.println("  resume timing error: " + (resumeHeard - (resumeMaster - MASTER_OFFSET)) / 1000 + " us, PTP offset error: " + (ptp.offset(master.clockId) - MASTER_OFFSET) / 1000 + " us");
-            TestSupport.check(Math.abs(resumeHeard - (resumeMaster - MASTER_OFFSET)) < 10_000_000L,
-                    "resumed on time: off by " + (resumeHeard - (resumeMaster - MASTER_OFFSET)) / 1000 + " us");
+            System.out.println("  resume timing error: " + (resumeHeard - (resumeMaster - MASTER_OFFSET + shift)) / 1000 + " us, PTP offset error: " + (ptp.offset(master.clockId) - MASTER_OFFSET) / 1000 + " us");
+            TestSupport.check(Math.abs(resumeHeard - (resumeMaster - MASTER_OFFSET + shift)) < 10_000_000L,
+                    "resumed on time: off by " + (resumeHeard - (resumeMaster - MASTER_OFFSET + shift)) / 1000 + " us");
 
             RtspMessage teardown = client.send("TEARDOWN", "rtsp://x/1", null, null);
             TestSupport.check("close".equalsIgnoreCase(teardown.header("Connection")), "TEARDOWN closes");

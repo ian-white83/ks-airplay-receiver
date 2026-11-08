@@ -240,6 +240,7 @@ final class RtspConnection implements Runnable {
                 stopSession();
                 BufferedSession s = new BufferedSession(platform, server.audioEvents(this), server.clock(), shk, ct, spf);
                 s.setVolume(server.volumeDb());
+                s.setOffset(server.offsetNanos());
                 session = s;
                 server.streamStarted(this, ct);
                 Map<String, Object> r = new LinkedHashMap<>();

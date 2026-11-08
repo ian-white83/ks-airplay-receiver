@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- New **Audio offset** setting under Playback: shift AirPlay audio from 3 seconds earlier to 3 seconds later. It applies to the playing stream straight away.
+
 ## 0.2.0
 
 - AirPlay 2 multi-room: the kiosk groups with HomePods and other AirPlay 2 speakers and plays in sync.

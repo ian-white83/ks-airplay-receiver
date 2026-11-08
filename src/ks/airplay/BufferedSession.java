@@ -73,6 +73,7 @@ public final class BufferedSession {
     private boolean flushDecoder;
 
     private volatile float volumeGain = 1f, duckGain = 1f;
+    private volatile long offsetNanos;
     private volatile Platform.AudioSink sink;
     private volatile boolean active;
     private volatile long lastAudioNanos;
@@ -169,6 +170,9 @@ public final class BufferedSession {
             setActive(false);
         }
     }
+
+    /** Shift playout: positive plays later, negative earlier (within what the sender has already sent). */
+    public void setOffset(long nanos) { offsetNanos = nanos; }
 
     public void setVolume(double db) {
         volumeGain = AudioCurve.gain(db);
@@ -411,7 +415,7 @@ public final class BufferedSession {
                         warnedUnsynced = false;
                         platform.log("PTP clock found: playing in sync");
                     }
-                    due = anchorNetwork - off + (c.rtp - anchorRtp) * NANOS / RATE;
+                    due = anchorNetwork - off + (c.rtp - anchorRtp) * NANOS / RATE + offsetNanos;
                 }
                 long next = sink.nextPlayTime();
                 long error = next - due; // positive: this chunk would play late

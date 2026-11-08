@@ -71,6 +71,7 @@ Sync accuracy is a few milliseconds. PTP packets get their timestamps in Java ra
 
 | Setting | Default | What it does |
 | --- | --- | --- |
+| Audio offset | 0 s | Shifts AirPlay audio later (positive) or earlier (negative), from −3 to +3 seconds, to line it up with video or other speakers. Changes apply straight away |
 | Lower AirPlay while the assistant talks | On | Turns AirPlay down while Voice Satellite is listening, thinking or answering |
 | Lowered volume | 20% | How loud AirPlay stays while the assistant talks |
 | Wake the screen when playback starts | Off | Dismisses the screensaver and wakes the display when audio starts |
