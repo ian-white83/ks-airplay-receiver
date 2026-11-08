@@ -35,4 +35,7 @@ public interface Platform {
     AudioDecoder openDecoder(int ct, int samplesPerFrame) throws Exception;
 
     void log(String message);
+
+    /** A private folder for files the plugin keeps between sessions, or null to keep nothing. */
+    default java.io.File dataDir() { return null; }
 }

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
@@ -115,6 +115,14 @@
       "description": "Large cover art and track details filling the screen. \"When the screensaver starts\" shows it in place of the screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. \"Right away\" also opens it as soon as playback starts."
     },
     {
+      "key": "shizukuAtBoot",
+      "type": "boolean",
+      "title": "Start Shizuku as root at boot",
+      "default": false,
+      "group": "Shizuku",
+      "description": "Multi-room needs Shizuku running as root, and Shizuku stops when the kiosk restarts. On, the plugin starts it at boot through this device's own ADB, as adb root and adb shell would from a computer. Needs Rooted debugging and ADB over network on port 5555. The plugin keeps its own ADB key on this device."
+    },
+    {
       "key": "port",
       "type": "string",
       "title": "Port",
@@ -137,6 +145,14 @@
       "default": "",
       "group": "Advanced",
       "description": "For troubleshooting only. Leave empty for the default (0x401FCA00,0x1C340, as shairport-sync advertises). See the README."
+    },
+    {
+      "key": "shizukuCommand",
+      "type": "string",
+      "title": "Shizuku start command",
+      "default": "",
+      "group": "Advanced",
+      "description": "Leave empty to find Shizuku's starter automatically. Otherwise paste the command from Shizuku > Start via connected computer > View command."
     }
   ],
   "commands": [
@@ -166,6 +182,15 @@
       "readings": [
         "*"
       ]
+    }
+  ],
+  "buttons": [
+    {
+      "id": "startShizuku",
+      "title": "Start Shizuku now",
+      "label": "Start",
+      "group": "Shizuku",
+      "description": "Starts Shizuku as root the same way the boot start does. The first time, approve the \"Allow USB debugging?\" prompt on the kiosk screen with Always allow. If Shizuku already runs as root, this only checks that the boot start can reach ADB."
     }
   ]
 }

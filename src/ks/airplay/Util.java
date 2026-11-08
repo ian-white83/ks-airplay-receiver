@@ -32,6 +32,17 @@ public final class Util {
         return out.toByteArray();
     }
 
+    /** Standard base64 with padding and no line breaks. */
+    public static String base64(byte[] data) {
+        StringBuilder sb = new StringBuilder((data.length + 2) / 3 * 4);
+        for (int i = 0; i < data.length; i += 3) {
+            int n = (data[i] & 0xff) << 16 | (i + 1 < data.length ? (data[i + 1] & 0xff) << 8 : 0) | (i + 2 < data.length ? data[i + 2] & 0xff : 0);
+            sb.append(B64.charAt(n >> 18 & 63)).append(B64.charAt(n >> 12 & 63));
+            sb.append(i + 1 < data.length ? B64.charAt(n >> 6 & 63) : '=').append(i + 2 < data.length ? B64.charAt(n & 63) : '=');
+        }
+        return sb.toString();
+    }
+
     public static String hex(byte[] bytes) {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) sb.append(Character.forDigit((b >> 4) & 15, 16)).append(Character.forDigit(b & 15, 16));

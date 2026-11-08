@@ -13,6 +13,8 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
+import ks.airplay.adb.AdbKey;
+import ks.airplay.adb.ShizukuStarter;
 import ks.airplay.android.AndroidPlatform;
 import ks.airplay.android.Bonjour;
 import ks.airplay.android.NowPlayingViews;
@@ -56,6 +58,13 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     private String syncState = "";
     private ScheduledFuture<?> syncRefresh;
 
+    // Starting Shizuku through this device's own adbd.
+    static final String START_BUTTON = "startShizuku";
+    private final java.util.concurrent.atomic.AtomicReference<String> starterRun = new java.util.concurrent.atomic.AtomicReference<>();
+    private volatile Thread starter;
+    private boolean keyInstalled;
+    private AdbKey adbKey;
+
     static final int REDIRECT_OFFSET = 10000;
     /** Adds iptables redirects for PTP (319, 320) to ports an app may open. Run as root through Shizuku. */
     static final String REDIRECT_ADD = redirectScript("-C", "-I");
@@ -91,6 +100,8 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         int port = 7100;
         String deviceId = "";
         String features = "";
+        boolean shizukuAtBoot = false;
+        String shizukuCommand = "";
 
         static Settings from(Map<String, Object> map) {
             Settings s = new Settings();
@@ -111,6 +122,8 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             }
             s.deviceId = string(map, "deviceId", "").trim();
             s.features = string(map, "features", "").trim();
+            s.shizukuAtBoot = bool(map, "shizukuAtBoot", s.shizukuAtBoot);
+            s.shizukuCommand = string(map, "shizukuCommand", "").trim();
             return s;
         }
 
@@ -172,6 +185,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         }
         ensureDeviceId(raw);
         resolveNameAndStart();
+        if (settings.shizukuAtBoot) {
+            // Give Kiosk Satellite a moment to connect to a Shizuku that is already running.
+            worker.schedule(new Runnable() { @Override public void run() { bootStart(); } }, 8, TimeUnit.SECONDS);
+        }
     }
 
     @Override
@@ -183,6 +200,9 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         if (!AirPlayConfig.validDeviceId(next.deviceId)) {
             ensureDeviceId(raw);
             return;
+        }
+        if (next.shizukuAtBoot && (previous == null || !previous.shizukuAtBoot)) {
+            post(new Runnable() { @Override public void run() { keyInstalled = false; prepareBootStart(); } });
         }
         if (next.needsRestart(previous)) {
             if (!next.name.equals(previous == null ? null : previous.name)) resolvedName = null;
@@ -219,7 +239,22 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 }
             });
         } else if ("shizuku.state".equals(event)) {
-            post(new Runnable() { @Override public void run() { if (receiverOn && server != null && ptp == null) startPtp(); } });
+            post(new Runnable() { @Override public void run() {
+                if (receiverOn && server != null && ptp == null) startPtp();
+                prepareBootStart();
+            } });
+        } else if ("settings.button".equals(event)) {
+            if (payload != null && START_BUTTON.equals(payload.get("id")) && payload.get("run") instanceof String) {
+                final String run = (String) payload.get("run");
+                post(new Runnable() { @Override public void run() { startShizuku(run); } });
+            }
+        } else if ("settings.cancel".equals(event)) {
+            Object run = payload == null ? null : payload.get("run");
+            if (run != null && run.equals(starterRun.get())) {
+                starterRun.set(null);
+                Thread t = starter;
+                if (t != null) t.interrupt();
+            }
         } else if ("switch.receiver".equals(event)) {
             final boolean on = payload != null && Boolean.TRUE.equals(payload.get("on"));
             post(new Runnable() {
@@ -251,6 +286,9 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         w.shutdown();
         if (!w.awaitTermination(2500, TimeUnit.MILLISECONDS)) w.shutdownNow();
         worker = null;
+        starterRun.set(null);
+        Thread t = starter;
+        if (t != null) t.interrupt();
     }
 
     // ---------------------------------------------------------------- receiver control (worker thread)
@@ -440,6 +478,144 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
 
     private PtpClock.Log ptpLog() {
         return new PtpClock.Log() { @Override public void log(String message) { AirPlayPlugin.this.log(message); } };
+    }
+
+    // ---------------------------------------------------------------- starting Shizuku (worker thread)
+
+    private static boolean rootReady(Map<String, Object> state) {
+        Object uid = state == null ? null : state.get("uid");
+        return state != null && Boolean.TRUE.equals(state.get("granted")) && uid instanceof Number && ((Number) uid).intValue() == 0;
+    }
+
+    private Map<String, Object> shizukuStateOrNull() {
+        try {
+            return host.shizukuState();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private AdbKey adbKey() throws Exception {
+        if (adbKey == null) {
+            java.io.File dir = platform.dataDir();
+            adbKey = dir != null ? AdbKey.loadOrCreate(new java.io.File(dir, "adbkey"), "ks-airplay@kiosk") : AdbKey.generate("ks-airplay@kiosk");
+        }
+        return adbKey;
+    }
+
+    /**
+     * While Shizuku already runs as root, trust this plugin's ADB key and keep adbd on port 5555 across reboots,
+     * so the next boot needs no prompt. If adbd ignores the file, the prompt at the first start covers it.
+     */
+    private void prepareBootStart() {
+        if (keyInstalled || !settings.shizukuAtBoot || !rootReady(shizukuStateOrNull())) return;
+        final String line;
+        try {
+            line = adbKey().publicKey();
+        } catch (Exception e) {
+            log("Could not create the ADB key: " + e);
+            return;
+        }
+        keyInstalled = true;
+        String script = "k='" + line + "'; f=/data/misc/adb/adb_keys\n"
+                + "if ! grep -qF \"$k\" \"$f\" 2>/dev/null; then echo \"$k\" >> \"$f\" && chown system:shell \"$f\"; chmod 640 \"$f\"; restorecon \"$f\" 2>/dev/null; echo 'trusted the ADB key'; fi\n"
+                + "[ \"$(getprop persist.adb.tcp.port)\" = " + ShizukuStarter.PORT + " ] || { setprop persist.adb.tcp.port " + ShizukuStarter.PORT + "; echo 'kept ADB on port " + ShizukuStarter.PORT + "'; }\n"
+                + "exit 0";
+        try {
+            host.executeShizuku(new String[] {"/system/bin/sh", "-c", script}, 10000, new PluginHost.CommandCallback() {
+                @Override public void onResult(boolean ok, Object data, String error) {
+                    Object out = data instanceof Map ? ((Map<?, ?>) data).get("stdout") : null;
+                    if (!ok) log("Boot start setup failed: " + error);
+                    else if (out != null && !String.valueOf(out).trim().isEmpty()) log("Boot start: " + String.valueOf(out).trim().replace("\n", ", "));
+                }
+            });
+        } catch (RuntimeException e) {
+            keyInstalled = false;
+            log("Boot start setup failed: " + e.getMessage());
+        }
+    }
+
+    /** At boot: start Shizuku as root unless it already runs that way. */
+    private void bootStart() {
+        if (!settings.shizukuAtBoot) return;
+        if (rootReady(shizukuStateOrNull())) {
+            prepareBootStart();
+            return;
+        }
+        launchStarter(null, false);
+    }
+
+    /** The settings button: start Shizuku, or just check the ADB path when it already runs as root. */
+    private void startShizuku(String run) {
+        launchStarter(run, rootReady(shizukuStateOrNull()));
+    }
+
+    private void launchStarter(final String run, final boolean alreadyRunning) {
+        if (starter != null) {
+            if (run != null) setup(run, "error", "Already starting Shizuku. Wait for it to finish.");
+            return;
+        }
+        final AdbKey key;
+        try {
+            key = adbKey();
+        } catch (Exception e) {
+            if (run != null) setup(run, "error", "Could not create the ADB key: " + e.getMessage());
+            log("Could not create the ADB key: " + e);
+            return;
+        }
+        final String command = settings.shizukuCommand;
+        starterRun.set(run);
+        if (run == null) sync("Multi-room off: starting Shizuku as root");
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                String error = null, output = "";
+                try {
+                    output = new ShizukuStarter(key).run(command, alreadyRunning, run == null ? 120000 : 10000, 60000, new ShizukuStarter.Progress() {
+                        @Override public boolean report(String message) {
+                            if (Thread.currentThread().isInterrupted()) return false;
+                            if (message == null) return run == null || run.equals(starterRun.get());
+                            if (run == null) {
+                                log("Shizuku: " + message);
+                                return true;
+                            }
+                            return run.equals(starterRun.get()) && setup(run, "running", message);
+                        }
+                    });
+                } catch (ShizukuStarter.Stopped e) {
+                    error = "";
+                } catch (Exception e) {
+                    error = e.getMessage() == null ? e.toString() : e.getMessage();
+                }
+                final String err = error, out = output;
+                starter = null;
+                if (err != null && err.isEmpty()) return;
+                if (!out.isEmpty()) log("Shizuku starter: " + out);
+                String message;
+                if (err != null) {
+                    message = "Could not start Shizuku: " + err;
+                    log(message);
+                    if (run == null) post(new Runnable() { @Override public void run() { sync("Multi-room off: " + err); } });
+                } else if (alreadyRunning) {
+                    message = "Shizuku already runs as root, and the boot start can reach ADB as root.";
+                } else {
+                    message = "Shizuku started. Multi-room turns on once Kiosk Satellite connects to it.";
+                    log(message);
+                }
+                if (run != null && run.equals(starterRun.get())) setup(run, err == null ? "success" : "error", message);
+                starterRun.compareAndSet(run, null);
+            }
+        }, "airplay-shizuku");
+        t.setDaemon(true);
+        starter = t;
+        t.start();
+    }
+
+    private boolean setup(String run, String state, String message) {
+        try {
+            return host.setupResult(run, state, message.length() > 1000 ? message.substring(0, 1000) : message);
+        } catch (RuntimeException | LinkageError e) {
+            return false;
+        }
     }
 
     private void sync(final String text) {

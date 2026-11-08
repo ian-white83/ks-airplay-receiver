@@ -29,6 +29,15 @@ public final class AndroidPlatform implements Platform {
 
     @Override public void log(String message) { logger.log(message); }
 
+    /** Kiosk Satellite's no-backup files folder, so the ADB key never leaves the device in a backup. */
+    @Override public java.io.File dataDir() {
+        try {
+            return new java.io.File(Bonjour.applicationContext().getNoBackupFilesDir(), "plugin-airplay2-multiroom");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     @Override
     public AudioSink openSink(int sampleRate, int channels) {
         return new Sink(sampleRate, channels, logger);

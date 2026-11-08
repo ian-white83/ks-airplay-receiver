@@ -40,13 +40,27 @@ Multi-room needs root, granted through Shizuku:
 
 Without root the plugin still plays AirPlay 2 audio, but it isn't synced to other speakers.
 
+### Start Shizuku at boot
+
+Shizuku stops whenever the kiosk restarts. On LineageOS builds with **Rooted debugging** (Kiosk Satellite's Echo builds among them), the plugin can start it again by itself, with no computer and no extra apps:
+
+1. In **Developer options**, turn on **Rooted debugging**, and make sure ADB answers on port 5555 (run `adb tcpip 5555` once from a computer, or turn on **ADB over network**).
+2. In the plugin's settings, under **Shizuku**, turn on **Start Shizuku as root at boot**, then tap **Start** on **Start Shizuku now**.
+3. The first time, Android asks "Allow USB debugging?" for the plugin's key. Tick **Always allow** and tap **Allow**. If Shizuku already runs as root when you turn the setting on, the plugin adds its key to Android's trusted keys itself and there is no prompt.
+
+From then on, at each boot the plugin connects to the device's own ADB on 127.0.0.1:5555, switches it to root and runs Shizuku's starter, the same steps as `adb root` and `adb shell` from a computer. It also sets `persist.adb.tcp.port` to 5555 so ADB keeps listening there after a restart.
+
+The plugin finds Shizuku's starter by itself. If a Shizuku version puts it somewhere else, paste the command from **Shizuku > Start via connected computer > View command** into **Shizuku start command** under Advanced.
+
+The plugin's ADB key gives root through ADB, like the key of a computer you allowed. It stays in Kiosk Satellite's private, no-backup storage. To revoke it, use **Revoke USB debugging authorizations** in Developer options.
+
 ## Why it needs root
 
 An AirPlay 2 group shares one clock. The sender runs a PTP clock (IEEE 1588) and sends its timing on UDP ports 319 and 320. Every speaker plays each moment of audio when that clock says to.
 
 Android apps can't open ports below 1024. So at start, the plugin uses Shizuku as root once to add `iptables` rules. The rules redirect incoming UDP 319 and 320 to 10319 and 10320, which the plugin can open. The rules match only those two ports, and the plugin removes them when it stops.
 
-Nothing else runs as root. Kiosk Satellite allows plugins only short root commands, not root services. If a device already lets apps bind ports 319 and 320, the plugin uses them directly and skips iptables.
+Apart from the optional boot start above, nothing else runs as root. Kiosk Satellite allows plugins only short root commands, not root services. If a device already lets apps bind ports 319 and 320, the plugin uses them directly and skips iptables.
 
 ## What works and what does not
 

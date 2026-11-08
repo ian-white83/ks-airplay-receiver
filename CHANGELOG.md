@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- New **Start Shizuku as root at boot** setting. Shizuku stops when the kiosk restarts; with this on, the plugin starts it again through the device's own ADB (Rooted debugging, port 5555), with no computer or extra apps.
+- New **Start Shizuku now** button to run the same start by hand and approve the plugin's ADB key the first time.
+- New **Shizuku start command** setting under Advanced, for Shizuku versions that keep their starter somewhere unusual.
+- Screen readers describe the cover art and the floating player.
+
 ## 0.3.0
 
 - Full-screen Now Playing view: large cover art, track details and live progress on a background tinted from the artwork. It shows in place of the screensaver while AirPlay plays, or right away if you choose.
