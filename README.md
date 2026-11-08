@@ -19,7 +19,7 @@ This plugin is not affiliated with, endorsed by or sponsored by Apple Inc. AirPl
 
 AirPlay 2 Multi-Room is listed in [Community Plugins](https://kiosksatellite.com/plugins/). Use the button below to open it in your Kiosk Satellite and install it.
 
-[![Install in Kiosk Satellite](https://kiosksatellite.com/img/badges/plugin-add.svg)](https://kiosksatellite.com/redirect/plugin/?repository=OWNER/ks-airplay-receiver)
+[![Install in Kiosk Satellite](https://kiosksatellite.com/img/badges/plugin-add.svg)](https://kiosksatellite.com/redirect/plugin/?repository=ian-white83/ks-airplay-receiver)
 
 Or search for `AirPlay 2 Multi-Room` in **Settings > Plugin Manager > Browse plugins** in Kiosk Satellite.
 
