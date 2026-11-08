@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
@@ -177,6 +177,13 @@
   ],
   "groups": [
     {
+      "title": "Shizuku",
+      "readingsTitle": "Status",
+      "readings": [
+        "text_sensor.shizuku"
+      ]
+    },
+    {
       "title": "Receiver",
       "readingsTitle": "Now playing",
       "readings": [
@@ -190,7 +197,7 @@
       "title": "Start Shizuku now",
       "label": "Start",
       "group": "Shizuku",
-      "description": "Starts Shizuku as root the same way the boot start does. The first time, approve the \"Allow USB debugging?\" prompt on the kiosk screen with Always allow. If Shizuku already runs as root, this only checks that the boot start can reach ADB."
+      "description": "Starts Shizuku as root the same way the boot start does. The first time, approve the \"Allow USB debugging?\" prompt on the kiosk screen with Always allow. If Shizuku already runs as root, this only checks that the boot start can reach ADB. Status below shows whether Shizuku is running."
     }
   ]
 }

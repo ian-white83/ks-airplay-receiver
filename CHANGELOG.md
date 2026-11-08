@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- The Shizuku section now comes first on the plugin's page, right under Shizuku access.
+- New **Shizuku** status reading under the Start button: Running as root, Running as shell, Not running, no access for Kiosk Satellite, or Starting. It also shows why a start failed, and is published to Home Assistant.
+
 ## 0.4.0
 
 - New **Start Shizuku as root at boot** setting. Shizuku stops when the kiosk restarts; with this on, the plugin starts it again through the device's own ADB (Rooted debugging, port 5555), with no computer or extra apps.

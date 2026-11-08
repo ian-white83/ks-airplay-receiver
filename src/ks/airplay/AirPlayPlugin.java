@@ -241,6 +241,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         } else if ("shizuku.state".equals(event)) {
             post(new Runnable() { @Override public void run() {
                 if (receiverOn && server != null && ptp == null) startPtp();
+                if (starter == null) shizukuStatus(describe(shizukuStateOrNull()));
                 prepareBootStart();
             } });
         } else if ("settings.button".equals(event)) {
@@ -487,6 +488,19 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         return state != null && Boolean.TRUE.equals(state.get("granted")) && uid instanceof Number && ((Number) uid).intValue() == 0;
     }
 
+    /** The Shizuku reading under the Start button, in words. */
+    static String describe(Map<String, Object> state) {
+        if (state == null || !Boolean.TRUE.equals(state.get("available"))) return "Not running";
+        if (!Boolean.TRUE.equals(state.get("granted"))) return "Running, but Kiosk Satellite has no access. Tap Shizuku access.";
+        Object uid = state.get("uid");
+        if (uid instanceof Number && ((Number) uid).intValue() == 0) return "Running as root";
+        return "Running as shell, not root (uid " + uid + ")";
+    }
+
+    private void shizukuStatus(final String text) {
+        safe(new Runnable() { @Override public void run() { host.publishTextSensor("shizuku", "Shizuku", text.length() > 255 ? text.substring(0, 255) : text); } });
+    }
+
     private Map<String, Object> shizukuStateOrNull() {
         try {
             return host.shizukuState();
@@ -566,6 +580,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         final String command = settings.shizukuCommand;
         starterRun.set(run);
         if (run == null) sync("Multi-room off: starting Shizuku as root");
+        if (!alreadyRunning) shizukuStatus("Starting…");
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
                 String error = null, output = "";
@@ -588,6 +603,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 }
                 final String err = error, out = output;
                 starter = null;
+                post(new Runnable() { @Override public void run() {
+                    String now = describe(shizukuStateOrNull());
+                    shizukuStatus(err != null && !err.isEmpty() && !now.equals("Running as root") ? now + ". Start failed: " + err : now);
+                } });
                 if (err != null && err.isEmpty()) return;
                 if (!out.isEmpty()) log("Shizuku starter: " + out);
                 String message;
@@ -854,6 +873,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             host.publishSwitch("receiver", "AirPlay receiver", true);
             host.publishTextSensor("sync", "AirPlay multi-room", "Starting");
         } });
+        post(new Runnable() { @Override public void run() { shizukuStatus(describe(shizukuStateOrNull())); } });
     }
 
     private static Map<String, Object> volumeMeta() {
