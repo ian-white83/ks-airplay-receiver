@@ -57,6 +57,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     private boolean redirected, ptpStarting;
     private String syncState = "";
     private ScheduledFuture<?> syncRefresh;
+    private int refreshes;
 
     // Starting Shizuku through this device's own adbd.
     static final String START_BUTTON = "startShizuku", CHECK_BUTTON = "checkShizuku";
@@ -76,8 +77,9 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             for (int port : new int[] {319, 320}) {
                 String rule = " -w -t nat %s PREROUTING -p udp --dport " + port + " -j REDIRECT --to-ports " + (port + REDIRECT_OFFSET);
                 if (check != null) {
-                    sb.append(tool).append(String.format(rule, check)).append(" 2>/dev/null || ")
-                      .append(tool).append(String.format(rule, action)).append(" || { echo '").append(tool).append(' ').append(port)
+                    sb.append(tool).append(String.format(rule, check)).append(" 2>/dev/null || { ")
+                      .append(tool).append(String.format(rule, action)).append(" && echo 'added ").append(tool).append(' ').append(port)
+                      .append("'; } || { echo '").append(tool).append(' ').append(port)
                       .append(" failed'; ").append(tool.endsWith("/iptables") ? "r=1; " : "").append("}; ");
                 } else {
                     sb.append("while ").append(tool).append(String.format(rule, action)).append(" 2>/dev/null; do :; done; ");
@@ -457,8 +459,27 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             @Override public void run() {
                 PtpClock c = ptp;
                 if (c != null) sync("Multi-room ready, " + c.describe());
+                if (redirected && ++refreshes % 2 == 0) repairRedirect();
             }
         }, 15, 15, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Put the port redirect back if something removed it, such as the previous session of this plugin cleaning
+     * up after a plugin update just after this session added it. Without it no PTP reaches the plugin.
+     */
+    private void repairRedirect() {
+        try {
+            host.executeShizuku(new String[] {"/system/bin/sh", "-c", REDIRECT_ADD}, 15000, new PluginHost.CommandCallback() {
+                @Override public void onResult(boolean ok, Object data, String error) {
+                    Object out = ok && data instanceof Map ? ((Map<?, ?>) data).get("stdout") : null;
+                    String text = out == null ? "" : String.valueOf(out).trim();
+                    if (text.contains("added /system/bin/iptables")) log("The PTP port redirect was missing and has been added again: " + text.replace("\n", ", "));
+                }
+            });
+        } catch (RuntimeException ignored) {
+            // busy with another Shizuku command or Shizuku went away: try again next time
+        }
     }
 
     private void stopPtp() {

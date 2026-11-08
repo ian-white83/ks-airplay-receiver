@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+- Fix: multi-room could lose its clock ("Multi-room ready, no clock yet") after a plugin update, because the outgoing version removed the PTP port redirect just after the new one added it. The plugin now checks the redirect every 30 seconds and puts it back if it's missing, and logs when it does.
+
 ## 0.4.2
 
 - The Shizuku button now says **Started** while Shizuku runs as root, and **Start** when it doesn't. Tapping **Started** checks that the boot start can still reach ADB. The status reading stays below it.
