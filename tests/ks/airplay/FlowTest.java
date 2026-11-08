@@ -37,7 +37,8 @@ public final class FlowTest {
     public static void main(String[] args) throws Exception {
         session(false);
         session(true);
-        unsynchronized();
+        unsynchronized(false);
+        unsynchronized(true);
         System.out.println("FlowTest passed");
     }
 
@@ -133,6 +134,7 @@ public final class FlowTest {
         }
 
         @Override public void log(String message) { logs.add(message); }
+        boolean logged(String part) { for (String l : logs) if (l.contains(part)) return true; return false; }
 
         synchronized short[] samples() {
             byte[] b = pcm.toByteArray();
@@ -296,7 +298,11 @@ public final class FlowTest {
         Master master = new Master(ptp.eventPort(), ptp.generalPort());
         AirPlayConfig config = new AirPlayConfig("Test Kiosk", "02:AA:BB:CC:DD:EE", 0, AirPlayConfig.DEFAULT_FEATURES);
         AirPlayServer server = new AirPlayServer(config, platform, events);
-        server.setClock(new BufferedSession.Clock() { @Override public Long offset(long id) { return ptp.offset(id); } });
+        final List<String> peers = new java.util.concurrent.CopyOnWriteArrayList<>();
+        server.setClock(new BufferedSession.Clock() {
+            @Override public Long offset(long id) { return ptp.offset(id); }
+            @Override public void peers(List<String> addresses) { peers.addAll(addresses); }
+        });
         int port = server.start();
         long shift = laggy ? 250_000_000L : 0; // the second run also checks the audio offset setting
         server.setOffset(shift);
@@ -336,6 +342,11 @@ public final class FlowTest {
             client.ok("RECORD", "rtsp://x/1", null, null);
             client.ok("SET_PARAMETER", "rtsp://x/1", "text/parameters", "volume: -15.000000\r\n".getBytes(Util.UTF8));
             client.ok("SETPEERS", "rtsp://x/1", "/peer-list-changed", BPlist.write(new ArrayList<Object>(Collections.singletonList("127.0.0.1"))));
+            Map<String, Object> homePod = new LinkedHashMap<>();
+            homePod.put("Addresses", new ArrayList<Object>(java.util.Arrays.asList("192.168.1.40", "fe80::1%en0")));
+            homePod.put("ID", "8A1B2C3D-0000-0000-0000-000000000002");
+            client.ok("SETPEERSX", "rtsp://x/1", "/peer-list-changed-x", BPlist.write(new ArrayList<Object>(Collections.singletonList(homePod))));
+            TestSupport.check(peers.contains("127.0.0.1") && peers.contains("192.168.1.40"), "group members passed to the clock: " + peers);
 
             // Let the clock settle, then push audio well ahead and anchor its first frame 600 ms from now.
             long deadline = System.currentTimeMillis() + 5000;
@@ -402,10 +413,25 @@ public final class FlowTest {
 
     /** Without a PTP clock the receiver still plays, as a standalone speaker shortly after the anchor. */
     @SuppressWarnings("unchecked")
-    static void unsynchronized() throws Exception {
+    static void unsynchronized(boolean otherClock) throws Exception {
         FakePlatform platform = new FakePlatform();
         AirPlayConfig config = new AirPlayConfig("Solo", "02:AA:BB:CC:DD:EF", 0, AirPlayConfig.DEFAULT_FEATURES);
         AirPlayServer server = new AirPlayServer(config, platform, new Events());
+        // otherClock: the only clock heard is not the group's (a HomePod leads, the iPhone is heard). Its time
+        // must not be used for the anchor, or every frame looks hours late and is dropped.
+        PtpClock ptp = null;
+        Master master = null;
+        if (otherClock) {
+            final FakePlatform pl = platform;
+            final PtpClock clock = new PtpClock(new PtpClock.Log() { @Override public void log(String m) { pl.log(m); } }, 0, 0);
+            clock.start();
+            ptp = clock;
+            master = new Master(clock.eventPort(), clock.generalPort());
+            server.setClock(new BufferedSession.Clock() { @Override public Long offset(long id) { return clock.offset(id); } });
+            long deadline = System.currentTimeMillis() + 5000;
+            while (clock.offset(master.clockId) == null && System.currentTimeMillis() < deadline) Thread.sleep(50);
+            TestSupport.check(clock.offset(42) != null, "the lone clock answers for any timeline");
+        }
         int port = server.start();
         try {
             Client client = new Client(port);
@@ -428,10 +454,14 @@ public final class FlowTest {
             client.ok("SETRATEANCHORTIME", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(anchor(42, 1000, 123_456_789_000L, 1)));
             short[] expected = TestSupport.pcmFixture();
             waitForSamples(platform, expected.length, 10000);
-            TestSupport.check(firstSound(platform.samples()) >= 0, "plays without PTP");
+            if (firstSound(platform.samples()) < 0) System.out.println(platform.logs);
+            TestSupport.check(firstSound(platform.samples()) >= 0, otherClock ? "plays when the clock heard is not the group's" : "plays without PTP");
+            if (otherClock) TestSupport.check(platform.logged("does not match timeline 2a"), "says the clock does not match");
             data.close();
         } finally {
             server.stop();
+            if (master != null) master.close();
+            if (ptp != null) ptp.stop();
         }
     }
 

@@ -28,6 +28,9 @@ public final class BufferedSession {
     public interface Clock {
         /** Clock time minus System.nanoTime(), in nanoseconds, or null if unknown. */
         Long offset(long timelineId);
+
+        /** SETPEERS: the addresses of the other devices in the group, whose clocks may lead it. */
+        default void peers(java.util.List<String> addresses) {}
     }
 
     static final int RATE = 44100;
@@ -67,6 +70,10 @@ public final class BufferedSession {
     private long fallbackOffset, anchorReceived;
     private boolean warnedUnsynced;
     private static final long CLOCK_WAIT_NANOS = 2 * 1_000_000_000L;
+    /** An anchor names a moment close to when it arrives; a clock putting it further away is the wrong clock. */
+    private static final long PLAUSIBLE_NANOS = 30 * 1_000_000_000L;
+    private long rejectedTimeline = -1;
+    private boolean fallbackRestarted;
     // Flush filters, guarded by lock.
     private final List<int[]> dropRanges = new ArrayList<>();
     private int dropUntilSeq = -1;
@@ -113,6 +120,7 @@ public final class BufferedSession {
             // Without a PTP clock, play as a standalone speaker starting a moment after the anchor arrives.
             anchorReceived = System.nanoTime();
             fallbackOffset = networkNanos - (anchorReceived + 250_000_000L);
+            fallbackRestarted = false;
             lock.notifyAll();
         }
     }
@@ -400,11 +408,24 @@ public final class BufferedSession {
                         continue;
                     }
                     Long off = clock == null ? null : clock.offset(anchorTimeline);
+                    if (off != null && Math.abs(anchorNetwork - off - anchorReceived) > PLAUSIBLE_NANOS) {
+                        if (rejectedTimeline != anchorTimeline) {
+                            rejectedTimeline = anchorTimeline;
+                            platform.log("The PTP clock heard does not match timeline " + Long.toHexString(anchorTimeline)
+                                    + " (anchor " + (anchorNetwork - off - anchorReceived) / 1_000_000L + " ms away): waiting for the group's clock");
+                        }
+                        off = null;
+                    }
                     if (off == null) {
                         // Give the sender's clock a moment to appear; it often starts with the group.
                         if (clock != null && System.nanoTime() - anchorReceived < CLOCK_WAIT_NANOS) {
                             lock.wait(20);
                             continue;
+                        }
+                        if (!fallbackRestarted && clock != null) {
+                            // The wait for a clock used up the anchor's lead: start from now instead of dropping it.
+                            fallbackRestarted = true;
+                            fallbackOffset = anchorNetwork - (System.nanoTime() + 250_000_000L);
                         }
                         if (!warnedUnsynced) {
                             warnedUnsynced = true;

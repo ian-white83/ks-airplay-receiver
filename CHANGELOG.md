@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.4
+
+- Fix: the kiosk went silent in groups that include a HomePod. When a HomePod leads the group's clock, the plugin now says hello to every group member the sender lists (SETPEERS), as nqptp does, so the HomePod starts sending it timing.
+- Fix: when the only clock heard isn't the group's, the plugin no longer uses its time, which made every frame look late and dropped it. It waits for the right clock, then plays unsynced instead of staying silent, and says so in the log.
+- The log now lists the group members each time the group changes.
+
 ## 0.4.3
 
 - Fix: multi-room could lose its clock ("Multi-room ready, no clock yet") after a plugin update, because the outgoing version removed the PTP port redirect just after the new one added it. The plugin now checks the redirect every 30 seconds and puts it back if it's missing, and logs when it does.

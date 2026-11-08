@@ -235,6 +235,50 @@ public final class PtpClock {
         return fresh == 1 ? only.offset : null;
     }
 
+    /**
+     * Say hello to the group's other devices, as nqptp does when it learns the timing peers: two Announce
+     * messages that make a quiet clock (a HomePod leading the group) start sending Sync. Runs in the background,
+     * and once more after two seconds for any peer still silent.
+     */
+    public void peers(final java.util.List<String> addresses) {
+        if (!running) return;
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                java.util.List<InetAddress> targets = new java.util.ArrayList<>();
+                for (String a : addresses) {
+                    try {
+                        if (a.indexOf('%') >= 0) continue; // link-local with an Apple interface name
+                        InetAddress ip = InetAddress.getByName(a);
+                        if (ip.isAnyLocalAddress() || ip.isLoopbackAddress() || java.net.NetworkInterface.getByInetAddress(ip) != null) continue;
+                        targets.add(ip);
+                    } catch (IOException | RuntimeException ignored) {
+                    }
+                }
+                for (int round = 0; round < 2 && running; round++) {
+                    for (InetAddress ip : targets) {
+                        if (round == 1 && heardFrom(ip)) continue;
+                        sendWake(ip, 248, 248);
+                    }
+                    try {
+                        Thread.sleep(2000);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }
+        }, "ptp-peers");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private synchronized boolean heardFrom(InetAddress ip) {
+        long now = System.nanoTime();
+        for (Clock c : clocks.values()) {
+            if (ip.equals(c.address) && c.samples > 0 && now - c.lastUpdate < STALE_NANOS) return true;
+        }
+        return false;
+    }
+
     /** A one-line summary for status. */
     public synchronized String describe() {
         long now = System.nanoTime();
@@ -248,8 +292,12 @@ public final class PtpClock {
     }
 
     private void sendWake(Clock c) {
+        if (c.address != null) sendWake(c.address, c.priority1, c.priority2);
+    }
+
+    private void sendWake(InetAddress address, int priority1, int priority2) {
         DatagramSocket s = general;
-        if (s == null || c.address == null) return;
+        if (s == null || address == null) return;
         try {
             for (int i = 0; i < 2; i++) {
                 byte[] m = new byte[64];
@@ -265,12 +313,12 @@ public final class PtpClock {
                 m[33] = (byte) 0xFE;
                 m[45] = 37; // currentUtcOffset
                 // First seem better than the clock, then worse, which prompts it to start sending Sync.
-                m[47] = (byte) (i == 0 ? Math.max(c.priority1 - 1, 0) : Math.min(c.priority1 + 1, 255));
+                m[47] = (byte) (i == 0 ? Math.max(priority1 - 1, 0) : Math.min(priority1 + 1, 255));
                 m[48] = (byte) 0xf8; m[49] = (byte) 0xfe; m[50] = 0x43; m[51] = 0x6a;
-                m[52] = (byte) c.priority2;
+                m[52] = (byte) priority2;
                 for (int k = 0; k < 8; k++) m[53 + k] = (byte) (selfId >>> (56 - 8 * k));
                 m[63] = (byte) 160;
-                s.send(new DatagramPacket(m, m.length, c.address, 320));
+                s.send(new DatagramPacket(m, m.length, address, 320));
                 if (i == 0) Thread.sleep(150);
             }
         } catch (IOException e) {

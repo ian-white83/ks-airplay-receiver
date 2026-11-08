@@ -156,7 +156,7 @@ final class RtspConnection implements Runnable {
         if (method.equals("RECORD")) return;
         if (method.equals("SETRATEANCHORTIME")) { anchor(req); return; }
         if (method.equals("FLUSHBUFFERED")) { flushBuffered(req); return; }
-        if (method.equals("SETPEERS") || method.equals("SETPEERSX")) return; // clocks are matched by the anchor's timeline ID
+        if (method.equals("SETPEERS") || method.equals("SETPEERSX")) { peers(req); return; }
         if (method.equals("TEARDOWN")) { teardown(req, res); return; }
         if (method.equals("GET_PARAMETER")) { getParameter(req, res); return; }
         if (method.equals("SET_PARAMETER")) { setParameter(req); return; }
@@ -276,6 +276,33 @@ final class RtspConnection implements Runnable {
             s.setAnchor(BPlist.getLong(p, "networkTimeTimelineID", 0), BPlist.getLong(p, "rtpTime", 0), nanos);
         }
         if (p.containsKey("rate")) s.setRate((int) BPlist.getLong(p, "rate", 0));
+    }
+
+    /**
+     * The group's members. SETPEERS lists address strings, SETPEERSX dictionaries with an Addresses list. The
+     * clock says hello to each, as nqptp does, since some (HomePods) only send timing to peers that ask.
+     */
+    private void peers(RtspMessage req) {
+        java.util.List<String> addresses = new java.util.ArrayList<>();
+        try {
+            if (req.body.length > 0) collectAddresses(BPlist.parse(req.body), addresses);
+        } catch (Exception e) {
+            platform.log("Could not read " + req.method + ": " + e.getMessage());
+            return;
+        }
+        platform.log(req.method + ": " + addresses);
+        BufferedSession.Clock c = server.clock();
+        if (c != null) c.peers(addresses);
+    }
+
+    private static void collectAddresses(Object o, java.util.List<String> out) {
+        if (o instanceof String) {
+            if (!out.contains(o)) out.add((String) o);
+        } else if (o instanceof List) {
+            for (Object x : (List<?>) o) collectAddresses(x, out);
+        } else if (o instanceof Map) {
+            collectAddresses(((Map<?, ?>) o).get("Addresses"), out);
+        }
     }
 
     private void flushBuffered(RtspMessage req) {
