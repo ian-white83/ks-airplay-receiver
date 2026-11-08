@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- Full-screen Now Playing view: large cover art, track details and live progress on a background tinted from the artwork. It shows in place of the screensaver while AirPlay plays, or right away if you choose.
+- The floating player stays up while AirPlay plays (the new default), shows progress and opens the full-screen view when tapped.
+- Track progress from the sender now drives both views.
+
 ## 0.2.1
 
 - New **Audio offset** setting under Playback: shift AirPlay audio from 3 seconds earlier to 3 seconds later. It applies to the playing stream straight away.

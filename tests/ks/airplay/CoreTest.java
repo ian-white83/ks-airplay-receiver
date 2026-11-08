@@ -41,6 +41,7 @@ public final class CoreTest {
         dmapAndTxt();
         config();
         gain();
+        nowPlaying();
         System.out.println("CoreTest passed");
     }
 
@@ -242,6 +243,21 @@ public final class CoreTest {
         TestSupport.check("Kitchen".equals(info.get("name")) && info.get("supportedFormats") instanceof java.util.Map, "/info contents");
         TestSupport.check(c.info("txtAirPlay", null, 0, null, false).get("txtAirPlay") instanceof byte[], "/info qualifier");
         TestSupport.check(c.airplayTxt("G1", true).get("gid").equals("G1") && c.airplayTxt(null, false).get("gid").equals(c.pi), "group ID in TXT");
+    }
+
+    static void nowPlaying() {
+        long t0 = 1_000_000_000_000L;
+        NowPlaying np = NowPlaying.EMPTY.withSource("Ian's iPhone").withTrack("Song", "Band", "Album");
+        TestSupport.check(np.subtitle().equals("Band — Album") && np.hasContent() && !np.hasProgress(), "now playing basics");
+        // 10 s into a 200 s track, RTP timestamps crossing the 32-bit wrap.
+        long start = 0xFFFF0000L;
+        np = np.withProgress(start, (start + 441_000) & 0xffffffffL, (start + 200 * 44100) & 0xffffffffL, t0).withPlaying(true, t0);
+        TestSupport.check(Math.abs(np.durationSeconds() - 200) < 1e-9, "duration across the wrap");
+        TestSupport.check(Math.abs(np.elapsedSeconds(t0 + 5_000_000_000L) - 15) < 1e-6, "progress runs while playing");
+        NowPlaying paused = np.withPlaying(false, t0 + 5_000_000_000L);
+        TestSupport.check(Math.abs(paused.elapsedSeconds(t0 + 60_000_000_000L) - 15) < 1e-3, "progress freezes when paused");
+        TestSupport.check(Math.abs(np.elapsedSeconds(t0 + 999_000_000_000L) - 200) < 1e-9, "progress stops at the end");
+        TestSupport.check(NowPlaying.clock(187.9).equals("3:07") && NowPlaying.clock(3725).equals("1:02:05"), "clock format");
     }
 
     static void gain() {

@@ -5,7 +5,8 @@ Turns a [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) kiosk int
 Kiosk Satellite already has its own AirPlay receiver for single-speaker playback. This plugin adds what that receiver doesn't: AirPlay 2 buffered audio locked to the sender's clock, so the kiosk can be part of a group.
 
 - Groups with other AirPlay 2 speakers for multi-room audio.
-- Follows the sender's volume slider, and shows the track, artist and cover art on a Now Playing card.
+- Follows the sender's volume slider.
+- Shows what's playing: a floating player over the dashboard, and a full-screen Now Playing view with large cover art that takes over from the screensaver while AirPlay plays.
 - Publishes what is playing to Home Assistant, with a switch to turn the receiver off.
 - Turns AirPlay audio down while Voice Satellite listens and answers.
 - Can wake the screen when playback starts, or run any gesture action through its triggers.
@@ -80,8 +81,13 @@ Sync accuracy is a few milliseconds. PTP packets get their timestamps in Java ra
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Now Playing card | On track change | **Off**, **On track change** (shows for 8 seconds when a track starts) or **While playing** |
-| Card position | Bottom | Top or bottom of the screen |
+| Floating player | While playing | A card with the cover art, track, artist and progress over the dashboard. **Off**, **On track change** (8 seconds when a track starts) or **While playing**. Tap it to open the full-screen view |
+| Floating player position | Bottom | Top or bottom of the screen |
+| Full-screen view | When the screensaver starts | Large cover art, the track, artist, album and progress on a background tinted from the artwork. **When the screensaver starts** shows it instead of your screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. **Right away** also opens it as soon as playback starts. **Off** leaves the screensaver alone |
+
+The full-screen view is a plugin screensaver, listed as **AirPlay Now Playing (AirPlay 2 Multi-Room)**. While AirPlay plays, the plugin makes it the screensaver, and puts your own screensaver back 15 seconds after playback stops. Your saved screensaver setting is never changed. Close the view the way you close any screensaver.
+
+Kiosk Satellite's built-in floating player and Now Playing view can't show this plugin's audio yet: plugins have no way to feed them. These views stand in until they can.
 
 ### Advanced
 

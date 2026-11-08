@@ -53,6 +53,8 @@ public final class PluginTest {
         @Override public void showOverlay(String key, OverlaySpec spec, OverlayFactory factory) { calls.add("overlay:" + key); }
         @Override public void hideOverlay(String key) { calls.add("hide:" + key); }
         @Override public void fireTrigger(String id) { calls.add("trigger:" + id); }
+        @Override public void publishScreensaverView(String key, String title, OverlayFactory factory) { calls.add("screensaver:" + key); }
+        @Override public boolean isHeadless() { return false; }
     }
 
     public static void main(String[] args) throws Exception {
@@ -84,6 +86,22 @@ public final class PluginTest {
         plugin.onEvent("ks.voice.state", java.util.Collections.<String, Object>singletonMap("state", "idle"));
         plugin.execute("restart", new HashMap<String, Object>());
         waitForInfo("Kitchen");
+
+        // A sender plays: the full-screen view becomes the screensaver and the floating player appears.
+        TestSupport.check(host.calls.contains("screensaver:" + AirPlayPlugin.SCREENSAVER_KEY), "full-screen view published as a screensaver");
+        plugin.onSessionStarted("Ian's iPhone");
+        Map<String, String> track = new HashMap<>();
+        track.put("title", "Song");
+        track.put("artist", "Band");
+        plugin.onMetadata(track);
+        plugin.onAudioActive(true);
+        waitForCall(host, "command:setScreensaverMode");
+        waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
+        waitForCall(host, "text:track=Song");
+        waitForCall(host, "trigger:playbackStarted");
+        plugin.onSessionEnded();
+        waitForCall(host, "command:clearScreensaverMode");
+        waitForCall(host, "hide:" + AirPlayPlugin.OVERLAY);
 
         plugin.onEvent("switch.receiver", java.util.Collections.<String, Object>singletonMap("on", false));
         waitClosed();

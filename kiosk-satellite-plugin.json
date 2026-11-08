@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
@@ -16,7 +16,9 @@
     "entities",
     "host.read",
     "host.control",
-    "shizuku"
+    "shizuku",
+    "screensaver",
+    "screensaver.mode"
   ],
   "icon": "icon.png",
   "settings": [
@@ -74,20 +76,20 @@
     {
       "key": "nowPlaying",
       "type": "select",
-      "title": "Now Playing card",
-      "default": "On track change",
+      "title": "Floating player",
+      "default": "While playing",
       "options": [
         "Off",
         "On track change",
         "While playing"
       ],
       "group": "Now Playing",
-      "description": "Show the track, artist and cover art over the dashboard: for a few seconds when the track changes, or for as long as audio plays."
+      "description": "A card with the track, artist, cover art and progress over the dashboard: for a few seconds when a track starts, or for as long as AirPlay plays. Tap it to open the full-screen view."
     },
     {
       "key": "position",
       "type": "select",
-      "title": "Card position",
+      "title": "Floating player position",
       "default": "Bottom",
       "options": [
         "Bottom",
@@ -98,6 +100,19 @@
         "key": "nowPlaying",
         "notEquals": "Off"
       }
+    },
+    {
+      "key": "fullScreen",
+      "type": "select",
+      "title": "Full-screen view",
+      "default": "When the screensaver starts",
+      "options": [
+        "Off",
+        "When the screensaver starts",
+        "Right away"
+      ],
+      "group": "Now Playing",
+      "description": "Large cover art and track details filling the screen. \"When the screensaver starts\" shows it in place of the screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. \"Right away\" also opens it as soon as playback starts."
     },
     {
       "key": "port",
