@@ -155,7 +155,7 @@ The tests check:
 - The crypto against RFC 8032, 7748 and 8439 vectors, the JDK and Python's `cryptography`.
 - The ALAC decoder bit for bit against ffmpeg.
 - The PTP filter against synthetic network delay.
-- Two full sessions with a simulated iPhone that is also the PTP master. The test covers pairing, the encrypted channel, a buffered stream, anchoring, pause, flush and resume. It checks each frame reaches the fake speaker within 3 ms of its anchored time and that the audio is intact; they typically land within 0.2 ms.
+- Two full sessions with a simulated iPhone that is also the PTP master. The test covers pairing, the encrypted channel, a buffered stream, anchoring, pause, flush and resume. It checks each frame reaches the fake speaker within 10 ms of its anchored time (a margin for slow CI machines) and that the audio is intact; they typically land within 0.2 ms.
 
 `tools/interop_pyatv.py` is an optional extra check. It pairs with a running receiver using [pyatv](https://github.com/postlund/pyatv)'s HomeKit client, the one pyatv uses with real Apple TVs, then exercises the encrypted channel.
 
