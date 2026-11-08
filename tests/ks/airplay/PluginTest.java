@@ -55,6 +55,15 @@ public final class PluginTest {
         @Override public void fireTrigger(String id) { calls.add("trigger:" + id); }
         @Override public void publishScreensaverView(String key, String title, OverlayFactory factory) { calls.add("screensaver:" + key); }
         @Override public boolean isHeadless() { return false; }
+        volatile Map<String, Object> shizuku;
+        @Override public Map<String, Object> shizukuState() {
+            if (shizuku == null) throw new UnsupportedOperationException("Shizuku is unavailable");
+            return shizuku;
+        }
+        @Override public void executeShizuku(String[] command, int timeoutMs, CommandCallback callback) {
+            calls.add("shizuku-exec");
+            callback.onResult(false, null, "not in tests");
+        }
     }
 
     public static void main(String[] args) throws Exception {
@@ -109,6 +118,25 @@ public final class PluginTest {
         plugin.onEvent("switch.receiver", java.util.Collections.<String, Object>singletonMap("on", true));
         waitForInfo("Kitchen");
 
+        // Shizuku comes up as root: the button turns into Started, and back to Start when it goes away.
+        TestSupport.check(host.calls.contains("text:shizuku=Not running"), "Shizuku reading published");
+        Map<String, Object> root = new HashMap<>();
+        root.put("available", true);
+        root.put("granted", true);
+        root.put("uid", 0);
+        host.shizuku = root;
+        plugin.onEvent("shizuku.state", root);
+        waitForCall(host, "text:shizuku=Running as root");
+        waitFor(() -> Boolean.TRUE.equals(host.saved.get("shizukuRunning")), "Started button shown");
+        settings.put("shizukuRunning", false); // someone flips the flag by hand
+        host.saved.put("shizukuRunning", false);
+        plugin.configure(settings);
+        waitFor(() -> Boolean.TRUE.equals(host.saved.get("shizukuRunning")), "flag put back");
+        host.shizuku = null;
+        host.saved.put("shizukuRunning", true);
+        plugin.onEvent("shizuku.state", new HashMap<String, Object>());
+        waitFor(() -> Boolean.FALSE.equals(host.saved.get("shizukuRunning")), "Start button back");
+
         t0 = System.nanoTime();
         plugin.stop();
         TestSupport.check(System.nanoTime() - t0 < 3_000_000_000L, "stop returns within the callback deadline");
@@ -133,6 +161,12 @@ public final class PluginTest {
             Thread.sleep(100);
         }
         throw new AssertionError("Receiver never answered as " + name + " (last " + last + ")");
+    }
+
+    static void waitFor(java.util.function.BooleanSupplier condition, String what) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) Thread.sleep(20);
+        TestSupport.check(condition.getAsBoolean(), what);
     }
 
     static void waitForCall(FakeHost host, String call) throws InterruptedException {

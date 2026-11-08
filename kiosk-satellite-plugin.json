@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
@@ -153,6 +153,14 @@
       "default": "",
       "group": "Advanced",
       "description": "Leave empty to find Shizuku's starter automatically. Otherwise paste the command from Shizuku > Start via connected computer > View command."
+    },
+    {
+      "key": "shizukuRunning",
+      "type": "boolean",
+      "title": "Shizuku is running as root",
+      "default": false,
+      "group": "Advanced",
+      "description": "Set by the plugin to switch the Shizuku button between Start and Started. Changing it here has no effect."
     }
   ],
   "commands": [
@@ -197,7 +205,22 @@
       "title": "Start Shizuku now",
       "label": "Start",
       "group": "Shizuku",
-      "description": "Starts Shizuku as root the same way the boot start does. The first time, approve the \"Allow USB debugging?\" prompt on the kiosk screen with Always allow. If Shizuku already runs as root, this only checks that the boot start can reach ADB. Status below shows whether Shizuku is running."
+      "visibleWhen": {
+        "key": "shizukuRunning",
+        "equals": false
+      },
+      "description": "Starts Shizuku as root the same way the boot start does. The first time, approve the \"Allow USB debugging?\" prompt on the kiosk screen with Always allow."
+    },
+    {
+      "id": "checkShizuku",
+      "title": "Shizuku is running",
+      "label": "Started",
+      "group": "Shizuku",
+      "visibleWhen": {
+        "key": "shizukuRunning",
+        "equals": true
+      },
+      "description": "Shizuku runs as root. Tap to check that the boot start can still reach ADB as root."
     }
   ]
 }

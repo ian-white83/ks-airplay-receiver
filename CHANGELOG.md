@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- The Shizuku button now says **Started** while Shizuku runs as root, and **Start** when it doesn't. Tapping **Started** checks that the boot start can still reach ADB. The status reading stays below it.
+
 ## 0.4.1
 
 - The Shizuku section now comes first on the plugin's page, right under Shizuku access.

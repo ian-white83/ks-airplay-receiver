@@ -114,7 +114,7 @@ On the plugin's page in **Plugin Manager** (or in **Settings > Device > Shizuku*
 Shizuku stops whenever the kiosk restarts. The plugin can start it again by itself, with no computer and no extra apps:
 
 1. In the plugin's **Shizuku** section, turn on **Start Shizuku as root at boot**. Do this while Shizuku still runs as root from step 5: the plugin then adds its own key to Android's trusted ADB keys and keeps ADB on port 5555 after restarts, so there is no prompt.
-2. Tap **Start** on **Start Shizuku now**. With Shizuku already running it only checks the path, and should report that the boot start can reach ADB as root. The **Shizuku** status under it shows the current state.
+2. The button in the **Shizuku** section should say **Started**, because Shizuku already runs as root. Tap it: it checks the path and should report that the boot start can reach ADB as root. The **Shizuku** status under it shows the current state.
 3. Restart the kiosk. About a minute after Kiosk Satellite comes up, **Shizuku** should say **Running as root** again and **AirPlay multi-room** **Multi-room ready**.
 
 If Android shows **Allow USB debugging?** for the plugin's key (`ks-airplay@kiosk`), tick **Always allow** and tap **Allow**.
@@ -156,7 +156,7 @@ Sync accuracy is a few milliseconds. PTP packets get their timestamps in Java ra
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Start Shizuku as root at boot | Off | Starts Shizuku as root through the device's own ADB whenever the kiosk boots. See [step 8](#8-make-it-survive-restarts) |
-| Start Shizuku now | button | Runs the same start by hand. If Shizuku already runs as root, it only checks that the boot start can reach ADB |
+| Start Shizuku now | button | **Start** while Shizuku isn't running as root: runs the same start by hand. It turns into **Started** once Shizuku runs as root; tapping that checks that the boot start can still reach ADB |
 
 The **Shizuku** status under the button shows whether Shizuku is running as root, as shell or not at all, and why a start failed.
 
@@ -194,6 +194,7 @@ Kiosk Satellite's built-in floating player and Now Playing view can't show this 
 | Port | 7100 | TCP port for AirPlay connections. The default keeps clear of Kiosk Satellite's own receiver |
 | AirPlay device ID | generated | Created on first start and saved. Clear it to make Apple devices see the kiosk as a new speaker |
 | Feature flags | empty | For troubleshooting only. Empty advertises `0x401FCA00,0x1C340`, the set shairport-sync uses |
+| Shizuku is running as root | set by the plugin | Switches the button between **Start** and **Started**. The plugin keeps it in step with Shizuku, so changing it has no effect |
 | Shizuku start command | empty | Empty finds Shizuku's starter automatically. Otherwise the command from **Shizuku > Start via connected computer > View command** |
 
 ## Home Assistant
