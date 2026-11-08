@@ -3,7 +3,6 @@ package ks.airplay;
 
 import java.io.FileInputStream;
 import java.io.InputStream;
-import java.net.ConnectException;
 import java.net.Socket;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -131,8 +130,8 @@ public final class PluginTest {
         while (System.currentTimeMillis() < deadline) {
             try (Socket s = new Socket("127.0.0.1", PORT)) {
                 Thread.sleep(100);
-            } catch (ConnectException e) {
-                return;
+            } catch (java.io.IOException e) {
+                return; // refused, or reset while the listener closed
             }
         }
         throw new AssertionError("Receiver still listening");
