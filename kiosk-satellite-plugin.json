@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
@@ -76,7 +76,7 @@
     {
       "key": "nowPlaying",
       "type": "select",
-      "title": "Floating player",
+      "title": "Show the player",
       "default": "While playing",
       "options": [
         "Off",
@@ -84,7 +84,23 @@
         "While playing"
       ],
       "group": "Now Playing",
-      "description": "A card with the track, artist, cover art and progress over the dashboard: for a few seconds when a track starts, or for as long as AirPlay plays. Tap it to open the full-screen view."
+      "description": "When the Now Playing player shows over the dashboard: for a few seconds when a track starts, or for as long as AirPlay plays. It doesn't need the screensaver."
+    },
+    {
+      "key": "playerStyle",
+      "type": "select",
+      "title": "Player style",
+      "default": "Floating",
+      "options": [
+        "Floating",
+        "Full screen"
+      ],
+      "group": "Now Playing",
+      "visibleWhen": {
+        "key": "nowPlaying",
+        "notEquals": "Off"
+      },
+      "description": "Floating: a card with the track, artist, cover art and progress, with a button that opens the full-screen player. Full screen: large cover art and track details over the whole dashboard, with a button that shrinks it to the floating card. Back does the same."
     },
     {
       "key": "position",
@@ -97,14 +113,14 @@
       ],
       "group": "Now Playing",
       "visibleWhen": {
-        "key": "nowPlaying",
-        "notEquals": "Off"
+        "key": "playerStyle",
+        "equals": "Floating"
       }
     },
     {
       "key": "fullScreen",
       "type": "select",
-      "title": "Full-screen view",
+      "title": "In the screensaver",
       "default": "When the screensaver starts",
       "options": [
         "Off",
@@ -112,7 +128,7 @@
         "Right away"
       ],
       "group": "Now Playing",
-      "description": "Large cover art and track details filling the screen. \"When the screensaver starts\" shows it in place of the screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. \"Right away\" also opens it as soon as playback starts."
+      "description": "Shows the full-screen view in place of the screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. Needs the screensaver turned on in Kiosk Satellite. \"Right away\" also starts the screensaver as soon as playback starts."
     },
     {
       "key": "shizukuAtBoot",

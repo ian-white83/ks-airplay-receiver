@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- New **Player style** setting: **Floating** or **Full screen**. The full-screen player now opens over the dashboard, so it works with the screensaver turned off.
+- The floating player has a full-screen button, and the full-screen player has a button that shrinks it back to the floating card. Back does the same.
+- Fix: the floating player no longer stays hidden after the screensaver has shown the full-screen view, or after back closed it.
+- **Floating player** is now **Show the player**, and **Full-screen view** is now **In the screensaver**. Saved choices carry over.
+
 ## 0.4.4
 
 - Fix: the kiosk went silent in groups that include a HomePod. When a HomePod leads the group's clock, the plugin now says hello to every group member the sender lists (SETPEERS), as nqptp does, so the HomePod starts sending it timing.

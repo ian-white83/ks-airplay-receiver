@@ -28,8 +28,8 @@ import me.jxl.kiosk.plugins.KsTheme;
 import me.jxl.kiosk.plugins.OverlayFactory;
 
 /**
- * The plugin's Now Playing views: a floating player over the dashboard and a full-screen view drawn as a plugin
- * screensaver. Both read one shared {@link NowPlaying} and refresh themselves, so the plugin only swaps the
+ * The plugin's Now Playing views: a floating player and a full-screen player over the dashboard, and the same
+ * full-screen view drawn as a plugin screensaver. Both read one shared {@link NowPlaying} and refresh themselves, so the plugin only swaps the
  * snapshot when something changes.
  */
 public final class NowPlayingViews {
@@ -55,13 +55,6 @@ public final class NowPlayingViews {
         for (final Updatable u : live) u.view().post(new Runnable() { @Override public void run() { u.update(true); } });
     }
 
-    /** How many full-screen views are showing now. */
-    public int fullScreenCount() {
-        int n = 0;
-        for (Updatable u : live) if (u instanceof FullScreen) n++;
-        return n;
-    }
-
     public OverlayFactory floating(final Tap tap) {
         return new OverlayFactory() {
             @Override public View create(Context context, KsTheme theme) {
@@ -73,10 +66,23 @@ public final class NowPlayingViews {
         };
     }
 
+    /** The full-screen player over the dashboard, with a button that calls minimise. */
+    public OverlayFactory fullScreenPlayer(final Tap minimise) {
+        return new OverlayFactory() {
+            @Override public View create(Context context, KsTheme theme) {
+                FullScreen f = new FullScreen(context, theme, minimise);
+                live.add(f);
+                return f.root;
+            }
+            @Override public void onDestroy(View view) { remove(view); }
+        };
+    }
+
+    /** The full-screen view for the screensaver: no buttons, since KS owns touches there. */
     public OverlayFactory fullScreen(final Runnable shownChanged) {
         return new OverlayFactory() {
             @Override public View create(Context context, KsTheme theme) {
-                FullScreen f = new FullScreen(context, theme);
+                FullScreen f = new FullScreen(context, theme, null);
                 live.add(f);
                 if (shownChanged != null) shownChanged.run();
                 return f.root;
@@ -172,6 +178,14 @@ public final class NowPlayingViews {
             pp.topMargin = theme.px(6);
             text.addView(progress, pp);
             text.addView(chip);
+            if (tap != null) {
+                View button = iconButton(context, theme, "mdi:fullscreen", theme.color("onSurfaceVariant"), "Open the full-screen player", tap);
+                if (button != null) {
+                    LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(theme.px(44), theme.px(44));
+                    bp.setMarginStart(theme.px(8));
+                    root.addView(button, bp);
+                }
+            }
             start();
         }
 
@@ -184,7 +198,7 @@ public final class NowPlayingViews {
             if (artChanged) setArt(cover, np.artwork, theme.px(60), theme, "onSurfaceVariant");
             progress.setVisibility(np.hasProgress() ? View.VISIBLE : View.GONE);
             cover.setContentDescription(artDescription(np));
-            root.setContentDescription(spoken(np) + ". Opens the full-screen Now Playing view.");
+            root.setContentDescription(spoken(np) + ". Opens the full-screen player.");
         }
 
         @Override void tick(NowPlaying np) {
@@ -203,7 +217,7 @@ public final class NowPlayingViews {
         private final LinearLayout progressRow;
         private final int artSize;
 
-        FullScreen(Context context, KsTheme theme) {
+        FullScreen(Context context, KsTheme theme, Tap minimise) {
             this.theme = theme;
             root = new FrameLayout(context);
             root.setBackgroundColor(Color.BLACK);
@@ -256,6 +270,22 @@ public final class NowPlayingViews {
             progressRow.addView(elapsed, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
             progressRow.addView(remaining, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
             text.addView(progressRow);
+            if (minimise != null) {
+                root.setClickable(true); // keep taps from reaching the dashboard underneath
+                View button = iconButton(context, theme, "mdi:fullscreen-exit", Color.WHITE, "Back to the floating player", minimise);
+                if (button == null) {
+                    TextView close = white(line(context, theme, 15f, 600, "onSurface"), 0.9f);
+                    close.setText("Minimise");
+                    int p = theme.px(12);
+                    close.setPadding(p, p, p, p);
+                    close.setOnClickListener(click(minimise));
+                    button = close;
+                }
+                FrameLayout.LayoutParams bp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+                if (button instanceof ImageView) bp.width = bp.height = theme.px(56);
+                bp.topMargin = bp.rightMargin = theme.px(16);
+                root.addView(button, bp);
+            }
             start();
         }
 
@@ -302,6 +332,44 @@ public final class NowPlayingViews {
     static String artDescription(NowPlaying np) {
         if (np.artwork == null) return "No cover art";
         return np.album.isEmpty() ? "Cover art" : "Cover art for " + np.album;
+    }
+
+    /** A round, borderless icon button, or null when this Kiosk Satellite has no icons. */
+    private static View iconButton(Context context, KsTheme theme, String icon, int color, String description, Tap tap) {
+        android.graphics.drawable.Drawable d;
+        try {
+            d = theme.icon(icon, "onSurface");
+        } catch (RuntimeException | LinkageError e) {
+            return null;
+        }
+        if (d == null) return null;
+        d = d.mutate();
+        d.setTint(color);
+        ImageView button = new ImageView(context);
+        button.setImageDrawable(d);
+        button.setScaleType(ImageView.ScaleType.CENTER);
+        int p = theme.px(8);
+        button.setPadding(p, p, p, p);
+        GradientDrawable ripple = new GradientDrawable();
+        ripple.setShape(GradientDrawable.OVAL);
+        ripple.setColor(Color.argb(28, Color.red(color), Color.green(color), Color.blue(color)));
+        button.setBackground(ripple);
+        button.setContentDescription(description);
+        button.setClickable(true);
+        button.setOnClickListener(click(tap));
+        return button;
+    }
+
+    private static View.OnClickListener click(final Tap tap) {
+        return new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    tap.onTap();
+                } catch (RuntimeException ignored) {
+                    // the session ended under the button: nothing to do
+                }
+            }
+        };
     }
 
     private static ImageView roundedImage(Context context, final int radius) {

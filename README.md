@@ -8,7 +8,7 @@ Kiosk Satellite already has its own AirPlay receiver for single-speaker playback
 
 - Groups with other AirPlay 2 speakers for multi-room audio.
 - Follows the sender's volume slider.
-- Shows what's playing: a floating player over the dashboard, and a full-screen Now Playing view with large cover art that takes over from the screensaver while AirPlay plays.
+- Shows what's playing: a floating player or a full-screen player with large cover art over the dashboard, and the same full-screen view in place of the screensaver while AirPlay plays.
 - Publishes what is playing to Home Assistant, with a switch to turn the receiver off.
 - Turns AirPlay audio down while Voice Satellite listens and answers.
 - Can wake the screen when playback starts, or run any gesture action through its triggers.
@@ -183,11 +183,14 @@ The **Shizuku** status under the button shows whether Shizuku is running as root
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Floating player | While playing | A card with the cover art, track, artist and progress over the dashboard. **Off**, **On track change** (8 seconds when a track starts) or **While playing**. Tap it to open the full-screen view |
+| Show the player | While playing | When the player shows over the dashboard: **Off**, **On track change** (8 seconds when a track starts) or **While playing** |
+| Player style | Floating | **Floating**: a card with the cover art, track, artist and progress, and a button that opens the full-screen player. **Full screen**: large cover art, the track, artist, album and progress over the whole dashboard, on a background tinted from the artwork, and a button that shrinks it to the floating card |
 | Floating player position | Bottom | Top or bottom of the screen |
-| Full-screen view | When the screensaver starts | Large cover art, the track, artist, album and progress on a background tinted from the artwork. **When the screensaver starts** shows it instead of your screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. **Right away** also opens it as soon as playback starts. **Off** leaves the screensaver alone |
+| In the screensaver | When the screensaver starts | **When the screensaver starts** shows the full-screen view instead of your screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. **Right away** also starts the screensaver as soon as playback starts. **Off** leaves the screensaver alone. Needs the screensaver turned on in Kiosk Satellite |
 
-The full-screen view is a plugin screensaver, listed as **AirPlay Now Playing (AirPlay 2 Multi-Room)**. While AirPlay plays, the plugin makes it the screensaver, and puts your own screensaver back 15 seconds after playback stops. Your saved screensaver setting is never changed. Close the view the way you close any screensaver.
+The floating and full-screen players work whether or not the screensaver is on. Back closes either one: the full-screen player shrinks to the floating card, and the floating card stays away until the next track.
+
+The screensaver view is a plugin screensaver, listed as **AirPlay Now Playing (AirPlay 2 Multi-Room)**. While AirPlay plays, the plugin makes it the screensaver, and puts your own screensaver back 15 seconds after playback stops. Your saved screensaver setting is never changed. Close the view the way you close any screensaver.
 
 Kiosk Satellite's built-in floating player and Now Playing view can't show this plugin's audio yet: plugins have no way to feed them. These views stand in until they can.
 

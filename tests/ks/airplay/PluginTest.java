@@ -108,6 +108,32 @@ public final class PluginTest {
         waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
         waitForCall(host, "text:track=Song");
         waitForCall(host, "trigger:playbackStarted");
+
+        TestSupport.check(host.calls.contains("text:shizuku=Not running"), "Shizuku reading published");
+        // Full-screen style: the full-screen player opens over the dashboard, without the screensaver.
+        host.calls.clear();
+        settings.put("nowPlaying", "While playing");
+        settings.put("playerStyle", "Full screen");
+        plugin.configure(settings);
+        waitForCall(host, "overlay:" + AirPlayPlugin.FULL_OVERLAY);
+        TestSupport.check(!host.calls.contains("command:startScreensaver"), "full screen needs no screensaver");
+        // Back (or its minimise button) shrinks it to the floating card.
+        host.calls.clear();
+        plugin.onEvent("overlay.closed", java.util.Collections.<String, Object>singletonMap("key", AirPlayPlugin.FULL_OVERLAY));
+        waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
+        TestSupport.check(!host.calls.contains("overlay:" + AirPlayPlugin.FULL_OVERLAY), "stays minimised");
+        // Floating style with the card closed by back: it stays closed until the next track.
+        host.calls.clear();
+        settings.put("playerStyle", "Floating");
+        plugin.configure(settings);
+        waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
+        TestSupport.check(!host.calls.contains("overlay:" + AirPlayPlugin.FULL_OVERLAY), "floating style shows the card");
+        plugin.onEvent("overlay.closed", java.util.Collections.<String, Object>singletonMap("key", AirPlayPlugin.OVERLAY));
+        host.calls.clear();
+        track.put("title", "Next song");
+        plugin.onMetadata(track);
+        waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
+
         plugin.onSessionEnded();
         waitForCall(host, "command:clearScreensaverMode");
         waitForCall(host, "hide:" + AirPlayPlugin.OVERLAY);
@@ -119,7 +145,6 @@ public final class PluginTest {
         waitForInfo("Kitchen");
 
         // Shizuku comes up as root: the button turns into Started, and back to Start when it goes away.
-        TestSupport.check(host.calls.contains("text:shizuku=Not running"), "Shizuku reading published");
         Map<String, Object> root = new HashMap<>();
         root.put("available", true);
         root.put("granted", true);
