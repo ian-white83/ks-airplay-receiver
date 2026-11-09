@@ -800,8 +800,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         hideCardNow();
         hideFullNow();
         fullRequested = fullClosed = cardClosed = windowOpen = false;
-        remote = null;
-        remoteAddress = null;
+        // The remote stays: senders name it once, sometimes on a separate connection that outlives the session.
         views.refresh();
         if (was) fire("playbackStopped");
     }
@@ -900,10 +899,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
 
     @Override public void onRemote(final DacpRemote r, final java.net.InetAddress sender) {
         post(new Runnable() { @Override public void run() {
-            boolean first = remote == null;
+            boolean first = remote == null || !r.dacpId.equals(remote.dacpId);
             remote = r;
             remoteAddress = null;
-            if (first) log("The sender offers remote control (DACP " + r.dacpId + ")");
+            if (first) log("The sender offers remote control (DACP " + r.dacpId + " from " + sender.getHostAddress() + ")");
             views.refresh();
         } });
     }

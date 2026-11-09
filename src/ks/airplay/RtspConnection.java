@@ -64,13 +64,21 @@ final class RtspConnection implements Runnable {
 
     /** Senders name their DACP remote on every request; pass it on when it first appears or changes. */
     private void remoteHeaders(RtspMessage req) {
+        if (!loggedHeaders && "SETUP".equals(req.method)) {
+            // Diagnostics: which headers the sender uses (names only), to see whether it offers a remote.
+            loggedHeaders = true;
+            platform.log("SETUP from " + socket.getInetAddress().getHostAddress() + " with headers " + req.headerNames());
+        }
         String id = req.header("DACP-ID"), remote = req.header("Active-Remote");
         if (id == null || remote == null || id.isEmpty() || remote.isEmpty()) return;
         if (id.equals(dacpId) && remote.equals(activeRemote)) return;
         dacpId = id;
         activeRemote = remote;
-        if (session != null) server.listener().onRemote(new DacpRemote(id, remote), socket.getInetAddress());
+        // From the audio connection or the sender's separate remote-control connection alike.
+        server.listener().onRemote(new DacpRemote(id, remote), socket.getInetAddress());
     }
+
+    private boolean loggedHeaders;
 
     /** Called when this connection's buffered session starts, so the plugin learns its remote. */
     void announceRemote() {

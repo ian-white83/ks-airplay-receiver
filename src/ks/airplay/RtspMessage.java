@@ -31,6 +31,11 @@ public final class RtspMessage {
         return headers.get(name.toLowerCase(Locale.ROOT));
     }
 
+    /** Header names as received, lower case. */
+    public java.util.Set<String> headerNames() {
+        return java.util.Collections.unmodifiableSet(headers.keySet());
+    }
+
     public String contentType() {
         String type = header("Content-Type");
         return type == null ? "" : type.trim();

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1
+
+- Fix: play/pause and skip buttons didn't show. The plugin only took the sender's remote-control details from the audio connection; iPhones may send them on a separate remote-control connection. It now takes them from either, and keeps them between sessions.
+- The log shows which headers each sender's SETUP carries, to diagnose remote control.
+
 ## 0.6.0
 
 - **Lyrics** in the full-screen player, in time with the music, from LRCLIB like Kiosk Satellite's own Now Playing. A lyrics button opens them in place of the title; the current line lights up and stays in view. New **Lyrics** and **Lyrics timing** settings.
