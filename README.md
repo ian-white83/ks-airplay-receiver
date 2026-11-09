@@ -229,7 +229,8 @@ The plugin does not contact any server. On the local network it uses:
 - Bonjour (mDNS) advertising of `_airplay._tcp` and `_raop._tcp`, through Android's network service discovery.
 - The control port, 7100 by default, over TCP. Senders pair with the standard AirPlay 2 transient pairing, and the connection is then encrypted.
 - One TCP port per stream for audio and one for events, picked at random.
-- UDP 319 and 320 (redirected to 10319 and 10320) to receive PTP timing from senders.
+- UDP 319 and 320 (redirected to 10319 and 10320) to receive PTP timing from senders. It also sends a short PTP Announce to each member of the group the sender lists, so the device leading the group's clock starts sending it timing, as shairport-sync's nqptp does.
+- Only with **Start Shizuku as root at boot** on: ADB on the device itself, 127.0.0.1:5555, signed in with the plugin's own key, to start Shizuku. While Shizuku runs as root it also adds that key to Android's trusted ADB keys and sets ADB to listen on port 5555 after restarts, which other devices on the network can reach but only with a key you allowed.
 
 Track details and playback state reach Home Assistant only through the kiosk's existing ESPHome connection.
 
