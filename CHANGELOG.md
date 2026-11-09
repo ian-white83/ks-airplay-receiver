@@ -4,6 +4,7 @@
 
 - Fix: play/pause and skip buttons didn't show. The plugin only took the sender's remote-control details from the audio connection; iPhones may send them on a separate remote-control connection. It now takes them from either, and keeps them between sessions.
 - The log shows which headers each sender's SETUP carries, to diagnose remote control.
+- Play, pause and skip from the kiosk aren't possible with iPhones and iPads: they don't offer DACP remote control to AirPlay 2 speakers. The buttons only show for a sender that offers it. See Playback controls in the README.
 
 ## 0.6.0
 

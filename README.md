@@ -8,7 +8,7 @@ Kiosk Satellite already has its own AirPlay receiver for single-speaker playback
 
 - Groups with other AirPlay 2 speakers for multi-room audio.
 - Follows the sender's volume slider.
-- Play, pause and skip from the kiosk, and lyrics in time with the music in the full-screen player.
+- Lyrics in time with the music in the full-screen player.
 - Shows what's playing: a floating player or a full-screen player with large cover art over the dashboard, and the same full-screen view in place of the screensaver while AirPlay plays.
 - Publishes what is playing to Home Assistant, with a switch to turn the receiver off.
 - Turns AirPlay audio down while Voice Satellite listens and answers.
@@ -150,7 +150,8 @@ Apart from the optional boot start above, nothing else runs as root. Kiosk Satel
 | iOS, iPadOS and macOS senders | AirPlay 1 senders: Kiosk Satellite's own receiver plays those |
 | AAC and ALAC buffered audio, 44.1 kHz stereo | 48 kHz and lossless 24-bit formats (the plugin doesn't offer them, so senders use 44.1 kHz) |
 | Volume, track info, cover art, synced lyrics | Password protection |
-| Play, pause and skip from the kiosk, when the sender offers remote control | Choosing which speakers play from the kiosk: the iPhone or Mac picks the group |
+| | Play, pause and skip from the kiosk: see [Playback controls](#playback-controls) |
+| | Choosing which speakers play from the kiosk: the iPhone or Mac picks the group |
 | | Adding the kiosk to the Apple Home app has not been tested and may not work |
 
 Sync accuracy is a few milliseconds. PTP packets get their timestamps in Java rather than in the kernel. That's fine between rooms; in the same room you may hear a slight difference against a HomePod.
@@ -192,7 +193,7 @@ The **Shizuku** status under the button shows whether Shizuku is running as root
 | Lyrics timing | 0 s | Moves the lyrics against the music, from -3 to +3 seconds. Positive values show each line earlier |
 | In the screensaver | When the screensaver starts | **When the screensaver starts** shows the full-screen view instead of your screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. **Right away** also starts the screensaver as soon as playback starts. **Off** leaves the screensaver alone. Needs the screensaver turned on in Kiosk Satellite |
 
-The floating and full-screen players work whether or not the screensaver is on. Both have play/pause, and the full-screen player has previous and next too, when the sender offers remote control: iPhones, iPads and Macs playing from the Music app normally do, over DACP, the same way they let shairport-sync control them. Without it the buttons stay hidden. Back closes either one: the full-screen player shrinks to the floating card, and the floating card stays away until the next track.
+The floating and full-screen players work whether or not the screensaver is on. Back closes either one: the full-screen player shrinks to the floating card, and the floating card stays away until the next track.
 
 The screensaver view is a plugin screensaver, listed as **AirPlay Now Playing (AirPlay 2 Multi-Room)**. While AirPlay plays, the plugin makes it the screensaver, and puts your own screensaver back 15 seconds after playback stops. Your saved screensaver setting is never changed. Close the view the way you close any screensaver.
 
@@ -224,9 +225,17 @@ The plugin adds these entities to the kiosk's ESPHome device:
 
 The Remote Admin Overview also gets an **AirPlay** status tile.
 
+## Playback controls
+
+**Play, pause and skip from the kiosk aren't possible with iPhones and iPads.** Control playback on the iPhone, from Control Center or the lock screen, as with any AirPlay 2 speaker group.
+
+The only remote control an unofficial receiver can use is DACP, the older AirPlay remote. iPhones and iPads don't offer it when they play to AirPlay 2 speakers: the plugin checks what each sender offers, and they send no remote. AirPlay 2's own remote control isn't publicly documented.
+
+The plugin keeps DACP support for any sender that does offer it. Then the players show play/pause and skip buttons; otherwise they show none.
+
 ## Actions and triggers
 
-- **Disconnect AirPlay sender**, **Restart AirPlay receiver**, **Play or pause AirPlay**, **Next AirPlay track** and **Previous AirPlay track** can go in the drawer, on a gesture or on an ESPHome button.
+- **Disconnect AirPlay sender** and **Restart AirPlay receiver** can go in the drawer, on a gesture or on an ESPHome button. **Play or pause AirPlay**, **Next AirPlay track** and **Previous AirPlay track** are listed too, but do nothing with iPhones and iPads: see [Playback controls](#playback-controls).
 - **AirPlay playback started** and **AirPlay playback stopped** are gesture triggers under **Gestures > Plugin trigger**.
 
 ## Privacy and network use
@@ -239,7 +248,7 @@ On the local network it uses:
 - The control port, 7100 by default, over TCP. Senders pair with the standard AirPlay 2 transient pairing, and the connection is then encrypted.
 - One TCP port per stream for audio and one for events, picked at random.
 - UDP 319 and 320 (redirected to 10319 and 10320) to receive PTP timing from senders. It also sends a short PTP Announce to each member of the group the sender lists, so the device leading the group's clock starts sending it timing, as shairport-sync's nqptp does.
-- Remote control (DACP): when you tap play/pause or skip, it finds the sender's `_dacp._tcp` service over Bonjour and sends it the command over HTTP, with the remote ID the sender gave it.
+- Remote control (DACP), only for a sender that offers it: when you tap play/pause or skip, it finds the sender's `_dacp._tcp` service over Bonjour and sends it the command over HTTP, with the remote ID the sender gave it.
 - Only with **Start Shizuku as root at boot** on: ADB on the device itself, 127.0.0.1:5555, signed in with the plugin's own key, to start Shizuku. While Shizuku runs as root it also adds that key to Android's trusted ADB keys and sets ADB to listen on port 5555 after restarts, which other devices on the network can reach but only with a key you allowed.
 
 Track details and playback state reach Home Assistant only through the kiosk's existing ESPHome connection.
