@@ -30,6 +30,8 @@ public final class AirPlayServer {
         void onArtwork(byte[] image, String contentType);
         /** RTP timestamps of the track start, now and end, 44100 per second. */
         void onProgress(long start, long current, long end);
+        /** The sender can be remote-controlled over DACP, or null when the session has no remote. */
+        default void onRemote(DacpRemote remote, java.net.InetAddress sender) {}
     }
 
     private final AirPlayConfig config;
@@ -136,6 +138,14 @@ public final class AirPlayServer {
 
     public synchronized boolean hasActiveSession() { return active != null; }
 
+    /** The RTP timestamp being heard right now, or Long.MIN_VALUE when nothing plays. */
+    public long playingRtp() {
+        RtspConnection c;
+        synchronized (this) { c = active; }
+        BufferedSession s = c == null ? null : c.session();
+        return s == null ? Long.MIN_VALUE : s.playingRtp(System.nanoTime());
+    }
+
     public synchronized String activeClient() { return active == null ? null : active.clientName(); }
 
     public double volumeDb() { return volumeDb; }
@@ -184,6 +194,7 @@ public final class AirPlayServer {
         BufferedSession s = connection.session();
         if (s != null) s.setDuck(duck);
         listener.onStreamStarted(connection.clientName(), ct);
+        connection.announceRemote();
     }
 
     void sessionEnded(RtspConnection connection) {

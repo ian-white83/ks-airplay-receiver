@@ -375,6 +375,10 @@ public final class FlowTest {
             System.out.println("  samples differing after drift correction: " + mismatched + " of " + expected.length);
             TestSupport.check(mismatched < expected.length / 50, "decrypted and decoded audio matches (" + mismatched + " samples differ)");
             TestSupport.check(Math.abs(platform.gain - 0.25f) < 1e-6, "volume applied");
+            // What's heard now, for lyrics: the anchor frame plus the time since it was due.
+            long heardRtp = server.playingRtp();
+            long expectRtp = rtp0 + (System.nanoTime() - due) * 44100 / 1_000_000_000L;
+            TestSupport.check(Math.abs((int) (heardRtp - expectRtp)) < 441, "playing position within 10 ms: off by " + (int) (heardRtp - expectRtp) + " frames");
 
             // Pause, flush everything, and resume with new audio anchored later.
             client.ok("SETRATEANCHORTIME", "rtsp://x/1", "application/x-apple-binary-plist", BPlist.write(anchor(master.clockId, rtp0, anchorMaster, 0)));

@@ -38,4 +38,7 @@ public interface Platform {
 
     /** A private folder for files the plugin keeps between sessions, or null to keep nothing. */
     default java.io.File dataDir() { return null; }
+
+    /** Find a Bonjour service by type (like "_dacp._tcp") and instance name. Blocks up to timeoutMs; null if not found. */
+    default java.net.InetSocketAddress findService(String type, String name, int timeoutMs) { return null; }
 }

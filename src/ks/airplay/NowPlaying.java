@@ -62,6 +62,9 @@ public final class NowPlaying {
 
     public boolean hasProgress() { return hasProgress; }
 
+    /** RTP time of the track start, from the sender's progress. */
+    public long startRtp() { return startRtp; }
+
     /** Track length in seconds, or 0 when unknown. */
     public double durationSeconds() {
         return hasProgress ? ((int) (endRtp - startRtp)) / (double) RATE : 0;

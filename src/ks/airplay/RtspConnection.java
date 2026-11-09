@@ -59,6 +59,23 @@ final class RtspConnection implements Runnable {
     }
 
     String clientName() { return clientName; }
+
+    private String dacpId, activeRemote;
+
+    /** Senders name their DACP remote on every request; pass it on when it first appears or changes. */
+    private void remoteHeaders(RtspMessage req) {
+        String id = req.header("DACP-ID"), remote = req.header("Active-Remote");
+        if (id == null || remote == null || id.isEmpty() || remote.isEmpty()) return;
+        if (id.equals(dacpId) && remote.equals(activeRemote)) return;
+        dacpId = id;
+        activeRemote = remote;
+        if (session != null) server.listener().onRemote(new DacpRemote(id, remote), socket.getInetAddress());
+    }
+
+    /** Called when this connection's buffered session starts, so the plugin learns its remote. */
+    void announceRemote() {
+        if (dacpId != null) server.listener().onRemote(new DacpRemote(dacpId, activeRemote), socket.getInetAddress());
+    }
     BufferedSession session() { return session; }
 
     @Override
@@ -73,6 +90,7 @@ final class RtspConnection implements Runnable {
                 RtspMessage request = RtspMessage.read(in);
                 if (request == null) break;
                 RtspMessage.Response response = new RtspMessage.Response();
+                remoteHeaders(request);
                 try {
                     handle(request, response);
                 } catch (Exception e) {

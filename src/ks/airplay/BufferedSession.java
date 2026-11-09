@@ -65,7 +65,8 @@ public final class BufferedSession {
     private boolean haveExtension;
     private long lastRtp;
     // Anchor and rate, guarded by lock.
-    private boolean anchored, playing;
+    private boolean anchored;
+    private volatile boolean playing;
     private long anchorTimeline, anchorRtp, anchorNetwork;
     private long fallbackOffset, anchorReceived;
     private boolean warnedUnsynced;
@@ -74,6 +75,9 @@ public final class BufferedSession {
     private static final long PLAUSIBLE_NANOS = 30 * 1_000_000_000L;
     private long rejectedTimeline = -1;
     private boolean fallbackRestarted;
+    // What is heard when: the RTP time of the last chunk scheduled and the local time it plays at.
+    private volatile long heardRtp, heardAt, frozenRtp = Long.MIN_VALUE;
+    private volatile boolean heard;
     // Flush filters, guarded by lock.
     private final List<int[]> dropRanges = new ArrayList<>();
     private int dropUntilSeq = -1;
@@ -121,8 +125,19 @@ public final class BufferedSession {
             anchorReceived = System.nanoTime();
             fallbackOffset = networkNanos - (anchorReceived + 250_000_000L);
             fallbackRestarted = false;
+            heard = false;
             lock.notifyAll();
         }
+    }
+
+    /**
+     * The RTP time of the audio heard at this local moment, the audio offset included, for lyrics. While paused,
+     * where it stopped. Long.MIN_VALUE before anything was scheduled.
+     */
+    public long playingRtp(long nowNanos) {
+        if (!playing) return frozenRtp;
+        if (!heard) return Long.MIN_VALUE;
+        return heardRtp + (nowNanos - heardAt) * RATE / NANOS;
     }
 
     /** rate 1 plays, rate 0 pauses. */
@@ -130,6 +145,7 @@ public final class BufferedSession {
         boolean pause;
         synchronized (lock) {
             pause = playing && rate == 0;
+            frozenRtp = pause ? playingRtp(System.nanoTime()) : Long.MIN_VALUE;
             playing = rate != 0;
             lock.notifyAll();
         }
@@ -437,6 +453,9 @@ public final class BufferedSession {
                         platform.log("PTP clock found: playing in sync");
                     }
                     due = anchorNetwork - off + (c.rtp - anchorRtp) * NANOS / RATE + offsetNanos;
+                    heardRtp = c.rtp;
+                    heardAt = due;
+                    heard = true;
                 }
                 long next = sink.nextPlayTime();
                 long error = next - due; // positive: this chunk would play late

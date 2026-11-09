@@ -29,6 +29,59 @@ public final class AndroidPlatform implements Platform {
 
     @Override public void log(String message) { logger.log(message); }
 
+    /** Browse with Android's NsdManager until the named instance turns up, then resolve its address and port. */
+    @Override public java.net.InetSocketAddress findService(final String type, final String name, int timeoutMs) {
+        final android.net.nsd.NsdManager nsd;
+        try {
+            nsd = (android.net.nsd.NsdManager) Bonjour.applicationContext().getSystemService(android.content.Context.NSD_SERVICE);
+        } catch (Exception e) {
+            return null;
+        }
+        if (nsd == null) return null;
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicReference<java.net.InetSocketAddress> found = new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.concurrent.atomic.AtomicBoolean resolving = new java.util.concurrent.atomic.AtomicBoolean();
+        android.net.nsd.NsdManager.DiscoveryListener listener = new android.net.nsd.NsdManager.DiscoveryListener() {
+            @Override public void onStartDiscoveryFailed(String serviceType, int errorCode) { done.countDown(); }
+            @Override public void onStopDiscoveryFailed(String serviceType, int errorCode) {}
+            @Override public void onDiscoveryStarted(String serviceType) {}
+            @Override public void onDiscoveryStopped(String serviceType) {}
+            @Override public void onServiceLost(android.net.nsd.NsdServiceInfo info) {}
+            @Override public void onServiceFound(android.net.nsd.NsdServiceInfo info) {
+                if (!name.equalsIgnoreCase(info.getServiceName()) || !resolving.compareAndSet(false, true)) return;
+                try {
+                    nsd.resolveService(info, new android.net.nsd.NsdManager.ResolveListener() {
+                        @Override public void onResolveFailed(android.net.nsd.NsdServiceInfo i, int errorCode) {
+                            resolving.set(false);
+                        }
+                        @Override public void onServiceResolved(android.net.nsd.NsdServiceInfo i) {
+                            if (i.getHost() != null) found.set(new java.net.InetSocketAddress(i.getHost(), i.getPort()));
+                            done.countDown();
+                        }
+                    });
+                } catch (RuntimeException e) {
+                    resolving.set(false);
+                }
+            }
+        };
+        try {
+            nsd.discoverServices(type, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, listener);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        try {
+            done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            try {
+                nsd.stopServiceDiscovery(listener);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        return found.get();
+    }
+
     /** Kiosk Satellite's no-backup files folder, so the ADB key never leaves the device in a backup. */
     @Override public java.io.File dataDir() {
         try {

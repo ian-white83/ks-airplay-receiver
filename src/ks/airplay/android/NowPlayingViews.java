@@ -23,7 +23,9 @@ import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 
+import ks.airplay.DacpRemote;
 import ks.airplay.NowPlaying;
+import ks.airplay.lyrics.Lyrics;
 import me.jxl.kiosk.plugins.KsTheme;
 import me.jxl.kiosk.plugins.OverlayFactory;
 
@@ -36,6 +38,14 @@ public final class NowPlayingViews {
     /** What the views need from the plugin. */
     public interface Source {
         NowPlaying nowPlaying();
+        /** Lyrics for the track, or null. */
+        default Lyrics lyrics() { return null; }
+        /** Seconds into the track the speaker plays now, for lyrics. */
+        default double position() { return 0; }
+        /** Whether the sender takes play, pause and skip commands. */
+        default boolean controls() { return false; }
+        /** Send a DacpRemote command. */
+        default void control(String command) {}
     }
 
     /** Something a view can do when tapped. */
@@ -145,6 +155,7 @@ public final class NowPlayingViews {
         private final ImageView cover;
         private final TextView title, subtitle, chip;
         private final ProgressBar progress;
+        private final ImageView playPause;
 
         Floating(Context context, KsTheme theme, final Tap tap) {
             this.theme = theme;
@@ -178,6 +189,12 @@ public final class NowPlayingViews {
             pp.topMargin = theme.px(6);
             text.addView(progress, pp);
             text.addView(chip);
+            playPause = iconButton(context, theme, "mdi:pause", theme.color("onSurface"), "Play or pause", command(DacpRemote.PLAY_PAUSE));
+            if (playPause != null) {
+                LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(theme.px(44), theme.px(44));
+                bp.setMarginStart(theme.px(8));
+                root.addView(playPause, bp);
+            }
             if (tap != null) {
                 View button = iconButton(context, theme, "mdi:fullscreen", theme.color("onSurfaceVariant"), "Open the full-screen player", tap);
                 if (button != null) {
@@ -199,6 +216,7 @@ public final class NowPlayingViews {
             progress.setVisibility(np.hasProgress() ? View.VISIBLE : View.GONE);
             cover.setContentDescription(artDescription(np));
             root.setContentDescription(spoken(np) + ". Opens the full-screen player.");
+            showPlayPause(playPause, np, theme.color("onSurface"), theme);
         }
 
         @Override void tick(NowPlaying np) {
@@ -216,9 +234,26 @@ public final class NowPlayingViews {
         private final ProgressBar progress;
         private final LinearLayout progressRow;
         private final int artSize;
+        private final boolean interactive;
+        private final KsTheme t;
+        private LinearLayout controlsRow, lyricsLines;
+        private android.widget.ScrollView lyricsScroll;
+        private ImageView playPause, lyricsButton;
+        private boolean lyricsOn;
+        private Lyrics shownLyrics;
+        private int currentLine = -2;
+        private final Runnable lyricsTick = new Runnable() {
+            @Override public void run() {
+                if (!lyricsOn) return;
+                highlight(false);
+                root.postDelayed(this, 150);
+            }
+        };
 
         FullScreen(Context context, KsTheme theme, Tap minimise) {
             this.theme = theme;
+            this.t = theme;
+            this.interactive = minimise != null;
             root = new FrameLayout(context);
             root.setBackgroundColor(Color.BLACK);
             android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
@@ -270,6 +305,36 @@ public final class NowPlayingViews {
             progressRow.addView(elapsed, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
             progressRow.addView(remaining, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
             text.addView(progressRow);
+            if (interactive) {
+                // Lyrics take the place of the title block while they're open.
+                lyricsScroll = new android.widget.ScrollView(context);
+                lyricsScroll.setVerticalScrollBarEnabled(false);
+                lyricsScroll.setVerticalFadingEdgeEnabled(true);
+                lyricsScroll.setFadingEdgeLength(theme.px(48));
+                lyricsLines = new LinearLayout(context);
+                lyricsLines.setOrientation(LinearLayout.VERTICAL);
+                lyricsScroll.addView(lyricsLines);
+                lyricsScroll.setVisibility(View.GONE);
+                int lyricsHeight = landscape ? Math.max(theme.px(160), artSize - theme.px(150)) : (int) (dm.heightPixels * 0.28f);
+                text.addView(lyricsScroll, 0, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, lyricsHeight));
+
+                controlsRow = new LinearLayout(context);
+                controlsRow.setGravity(Gravity.CENTER_VERTICAL | (landscape ? Gravity.START : Gravity.CENTER_HORIZONTAL));
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                cp.topMargin = theme.px(16);
+                text.addView(controlsRow, cp);
+                View previous = iconButton(context, theme, "mdi:skip-previous", Color.WHITE, "Previous track", command(DacpRemote.PREVIOUS));
+                playPause = iconButton(context, theme, "mdi:pause", Color.WHITE, "Play or pause", command(DacpRemote.PLAY_PAUSE));
+                View next = iconButton(context, theme, "mdi:skip-next", Color.WHITE, "Next track", command(DacpRemote.NEXT));
+                lyricsButton = iconButton(context, theme, "mdi:message-text-outline", Color.WHITE, "Show lyrics", new Tap() {
+                    @Override public void onTap() { setLyricsOn(!lyricsOn); }
+                });
+                int small = theme.px(56), big = theme.px(72);
+                if (previous != null) controlsRow.addView(previous, new LinearLayout.LayoutParams(small, small));
+                if (playPause != null) controlsRow.addView(playPause, spaced(big, theme.px(12)));
+                if (next != null) controlsRow.addView(next, spaced(small, theme.px(12)));
+                if (lyricsButton != null) controlsRow.addView(lyricsButton, spaced(small, theme.px(28)));
+            }
             if (minimise != null) {
                 root.setClickable(true); // keep taps from reaching the dashboard underneath
                 View button = iconButton(context, theme, "mdi:fullscreen-exit", Color.WHITE, "Back to the floating player", minimise);
@@ -294,6 +359,7 @@ public final class NowPlayingViews {
         @Override void draw(NowPlaying np, boolean artChanged) {
             title.setText(np.title.isEmpty() ? (np.source.isEmpty() ? "AirPlay" : np.source) : np.title);
             setOrHide(subtitle, np.subtitle());
+            if (lyricsOn) subtitle.setVisibility(View.GONE);
             chip.setText((np.playing ? "Playing on AirPlay" : "Paused") + (np.source.isEmpty() || np.title.isEmpty() ? "" : " from " + np.source));
             if (artChanged) {
                 Bitmap bitmap = setArt(cover, np.artwork, artSize, theme, "onSurfaceVariant");
@@ -307,6 +373,90 @@ public final class NowPlayingViews {
             progress.setVisibility(hasProgress ? View.VISIBLE : View.GONE);
             progressRow.setVisibility(hasProgress ? View.VISIBLE : View.GONE);
             cover.setContentDescription(artDescription(np));
+            if (interactive) drawControls(np);
+        }
+
+        private void drawControls(NowPlaying np) {
+            boolean controls = source.controls();
+            Lyrics lyrics = source.lyrics();
+            boolean hasLyrics = lyrics != null && (lyrics.instrumental || !lyrics.lines.isEmpty());
+            for (int i = 0; i < controlsRow.getChildCount(); i++) {
+                View v = controlsRow.getChildAt(i);
+                v.setVisibility(v == lyricsButton ? (hasLyrics ? View.VISIBLE : View.GONE) : (controls ? View.VISIBLE : View.GONE));
+            }
+            controlsRow.setVisibility(controls || hasLyrics ? View.VISIBLE : View.GONE);
+            showPlayPause(playPause, np, Color.WHITE, theme);
+            if (lyrics != shownLyrics) {
+                shownLyrics = lyrics;
+                buildLyrics(lyrics);
+                if (!hasLyrics && lyricsOn) setLyricsOn(false);
+            }
+        }
+
+        private void setLyricsOn(boolean on) {
+            lyricsOn = on && shownLyrics != null;
+            lyricsScroll.setVisibility(lyricsOn ? View.VISIBLE : View.GONE);
+            chip.setVisibility(lyricsOn ? View.GONE : View.VISIBLE);
+            title.setVisibility(lyricsOn ? View.GONE : View.VISIBLE);
+            if (lyricsOn) subtitle.setVisibility(View.GONE);
+            else update(true);
+            if (lyricsButton != null) {
+                lyricsButton.setAlpha(lyricsOn ? 1f : 0.7f);
+                lyricsButton.setContentDescription(lyricsOn ? "Hide lyrics" : "Show lyrics");
+                lyricsButton.setSelected(lyricsOn);
+                lyricsButton.getBackground().setAlpha(lyricsOn ? 255 : 0);
+            }
+            root.removeCallbacks(lyricsTick);
+            if (lyricsOn) {
+                currentLine = -2;
+                highlight(true);
+                root.post(lyricsTick);
+            }
+        }
+
+        private void buildLyrics(Lyrics lyrics) {
+            lyricsLines.removeAllViews();
+            currentLine = -2;
+            if (lyrics == null) return;
+            Context context = root.getContext();
+            if (lyrics.instrumental) {
+                lyricsLines.addView(lyricLine(context, "Instrumental", true));
+                return;
+            }
+            for (Lyrics.Line line : lyrics.lines) {
+                lyricsLines.addView(lyricLine(context, line.text.isEmpty() ? "♪" : line.text, !lyrics.synced));
+            }
+        }
+
+        private TextView lyricLine(Context context, String text, boolean bright) {
+            TextView v = white(line(context, t, 22f, 600, "onSurface"), bright ? 0.9f : 0.4f);
+            v.setSingleLine(false);
+            v.setText(text);
+            int p = t.px(6);
+            v.setPadding(0, p, 0, p);
+            return v;
+        }
+
+        /** Brighten the line being sung and keep it a third of the way down the panel. */
+        private void highlight(boolean jump) {
+            Lyrics lyrics = shownLyrics;
+            if (lyrics == null || !lyrics.synced) return;
+            int now = lyrics.lineAt(source.position());
+            if (now == currentLine) return;
+            for (int i = 0; i < lyricsLines.getChildCount(); i++) {
+                TextView v = (TextView) lyricsLines.getChildAt(i);
+                v.setTextColor(Color.argb(i == now ? 255 : i < now ? 90 : 110, 255, 255, 255));
+            }
+            currentLine = now;
+            View target = now >= 0 && now < lyricsLines.getChildCount() ? lyricsLines.getChildAt(now) : null;
+            int y = target == null ? 0 : Math.max(0, target.getTop() - lyricsScroll.getHeight() / 3);
+            if (jump) lyricsScroll.scrollTo(0, y);
+            else lyricsScroll.smoothScrollTo(0, y);
+        }
+
+        @Override void stop() {
+            super.stop();
+            root.removeCallbacks(lyricsTick);
         }
 
         @Override void tick(NowPlaying np) {
@@ -335,7 +485,7 @@ public final class NowPlayingViews {
     }
 
     /** A round, borderless icon button, or null when this Kiosk Satellite has no icons. */
-    private static View iconButton(Context context, KsTheme theme, String icon, int color, String description, Tap tap) {
+    private static ImageView iconButton(Context context, KsTheme theme, String icon, int color, String description, Tap tap) {
         android.graphics.drawable.Drawable d;
         try {
             d = theme.icon(icon, "onSurface");
@@ -358,6 +508,34 @@ public final class NowPlayingViews {
         button.setClickable(true);
         button.setOnClickListener(click(tap));
         return button;
+    }
+
+    private Tap command(final String command) {
+        return new Tap() { @Override public void onTap() { source.control(command); } };
+    }
+
+    private static LinearLayout.LayoutParams spaced(int size, int margin) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(size, size);
+        p.setMarginStart(margin);
+        return p;
+    }
+
+    /** Show the play/pause button only when the sender takes commands, with the icon for what a tap does. */
+    private void showPlayPause(ImageView button, NowPlaying np, int color, KsTheme theme) {
+        if (button == null) return;
+        boolean controls = source.controls();
+        button.setVisibility(controls ? View.VISIBLE : View.GONE);
+        if (!controls) return;
+        String icon = np.playing ? "mdi:pause" : "mdi:play";
+        if (icon.equals(button.getTag())) return;
+        button.setTag(icon);
+        try {
+            android.graphics.drawable.Drawable d = theme.icon(icon, "onSurface").mutate();
+            d.setTint(color);
+            button.setImageDrawable(d);
+        } catch (RuntimeException | LinkageError ignored) {
+        }
+        button.setContentDescription(np.playing ? "Pause" : "Play");
     }
 
     private static View.OnClickListener click(final Tap tap) {

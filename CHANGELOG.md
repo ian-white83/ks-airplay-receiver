@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- **Lyrics** in the full-screen player, in time with the music, from LRCLIB like Kiosk Satellite's own Now Playing. A lyrics button opens them in place of the title; the current line lights up and stays in view. New **Lyrics** and **Lyrics timing** settings.
+- **Play/pause and skip** on the players, when the sender offers remote control (DACP). Play/pause on the floating card; previous, play/pause and next on the full-screen player.
+- New actions: **Play or pause AirPlay**, **Next AirPlay track** and **Previous AirPlay track**.
+
 ## 0.5.1
 
 - Fix: the floating and full-screen players never appeared. Their overlay names had hyphens, which Kiosk Satellite doesn't accept, so it refused to show them. The screensaver view wasn't affected.

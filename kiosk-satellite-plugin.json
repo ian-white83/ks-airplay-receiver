@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
@@ -131,6 +131,30 @@
       "description": "Shows the full-screen view in place of the screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. Needs the screensaver turned on in Kiosk Satellite. \"Right away\" also starts the screensaver as soon as playback starts."
     },
     {
+      "key": "lyrics",
+      "type": "boolean",
+      "title": "Lyrics",
+      "default": true,
+      "group": "Now Playing",
+      "description": "Adds a lyrics button to the full-screen player, with lyrics in time with the music. They come from LRCLIB (lrclib.net), the same free database Kiosk Satellite's own Now Playing uses: the plugin sends it the track's title, artist, album and length. Off, nothing is looked up."
+    },
+    {
+      "key": "lyricsOffset",
+      "type": "number",
+      "title": "Lyrics timing",
+      "default": 0,
+      "min": -3,
+      "max": 3,
+      "step": 0.1,
+      "unit": "s",
+      "group": "Now Playing",
+      "visibleWhen": {
+        "key": "lyrics",
+        "equals": true
+      },
+      "description": "Moves the lyrics against the music. Positive values show each line earlier."
+    },
+    {
       "key": "shizukuAtBoot",
       "type": "boolean",
       "title": "Start Shizuku as root at boot",
@@ -187,6 +211,18 @@
     {
       "id": "restart",
       "title": "Restart AirPlay receiver"
+    },
+    {
+      "id": "playPause",
+      "title": "Play or pause AirPlay"
+    },
+    {
+      "id": "nextTrack",
+      "title": "Next AirPlay track"
+    },
+    {
+      "id": "previousTrack",
+      "title": "Previous AirPlay track"
     }
   ],
   "triggers": [

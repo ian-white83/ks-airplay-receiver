@@ -14,6 +14,8 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 import ks.airplay.adb.AdbKey;
+import ks.airplay.lyrics.Lrclib;
+import ks.airplay.lyrics.Lyrics;
 import ks.airplay.adb.ShizukuStarter;
 import ks.airplay.android.AndroidPlatform;
 import ks.airplay.android.Bonjour;
@@ -45,7 +47,26 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     private volatile NowPlaying np = NowPlaying.EMPTY;
     private final NowPlayingViews views = new NowPlayingViews(new NowPlayingViews.Source() {
         @Override public NowPlaying nowPlaying() { return np; }
+        @Override public Lyrics lyrics() { return settings.lyrics ? lyrics : null; }
+        @Override public double position() { return lyricsPosition(); }
+        @Override public boolean controls() { return remote != null; }
+        @Override public void control(String command) { remoteControl(command); }
     });
+
+    // Lyrics for the track playing, and the sender's remote control.
+    private volatile Lyrics lyrics;
+    private String lyricsKey = "";
+    private ScheduledFuture<?> lyricsLater;
+    private volatile DacpRemote remote;
+    private volatile java.net.InetSocketAddress remoteAddress;
+    private final java.util.concurrent.ExecutorService net = java.util.concurrent.Executors.newSingleThreadExecutor(new java.util.concurrent.ThreadFactory() {
+        @Override public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "airplay-net");
+            t.setDaemon(true);
+            return t;
+        }
+    });
+    static final String USER_AGENT = "ks-airplay-receiver (https://github.com/ian-white83/ks-airplay-receiver)";
     private boolean sessionLive, cardShown, modeSet, fullScreenAvailable, startedRightAway;
     // Full-screen player overlay: shown, opened by a tap, closed by the user, card closed by back, timed window open.
     private boolean fullShown, fullRequested, fullClosed, cardClosed, windowOpen;
@@ -97,6 +118,8 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         boolean duckVoice = true;
         int duckLevel = 20;
         double audioOffset = 0;
+        boolean lyrics = true;
+        double lyricsOffset = 0;
         boolean wakeScreen = false;
         String nowPlaying = "On track change";
         String position = "Bottom";
@@ -116,6 +139,8 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             s.duckVoice = bool(map, "duckVoice", s.duckVoice);
             s.duckLevel = (int) Math.round(number(map, "duckLevel", s.duckLevel));
             s.audioOffset = Math.max(-3.0, Math.min(3.0, number(map, "audioOffset", 0)));
+            s.lyrics = bool(map, "lyrics", true);
+            s.lyricsOffset = Math.max(-3.0, Math.min(3.0, number(map, "lyricsOffset", 0)));
             s.wakeScreen = bool(map, "wakeScreen", s.wakeScreen);
             s.nowPlaying = string(map, "nowPlaying", s.nowPlaying);
             s.position = string(map, "position", s.position);
@@ -238,6 +263,12 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             post(new Runnable() { @Override public void run() { if (server != null) server.disconnectActive(); } });
         } else if ("restart".equals(command)) {
             post(new Runnable() { @Override public void run() { restartReceiver(); } });
+        } else if ("playPause".equals(command)) {
+            remoteControl(DacpRemote.PLAY_PAUSE);
+        } else if ("nextTrack".equals(command)) {
+            remoteControl(DacpRemote.NEXT);
+        } else if ("previousTrack".equals(command)) {
+            remoteControl(DacpRemote.PREVIOUS);
         }
     }
 
@@ -767,6 +798,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         clearMode();
         publishPlayback();
         hideCardNow();
+        hideFullNow();
+        fullRequested = fullClosed = cardClosed = windowOpen = false;
+        remote = null;
+        remoteAddress = null;
         views.refresh();
         if (was) fire("playbackStopped");
     }
@@ -844,6 +879,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             np = np.withTrack(title, metadata.get("artist"), metadata.get("album"));
             publishPlayback();
             refreshCard(changed);
+            scheduleLyrics();
         } });
     }
 
@@ -858,6 +894,98 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         post(new Runnable() { @Override public void run() {
             np = np.withProgress(start, current, end, System.nanoTime());
             views.refresh();
+            if (lyrics == null) scheduleLyrics(); // the duration helps LRCLIB pick the right version
+        } });
+    }
+
+    @Override public void onRemote(final DacpRemote r, final java.net.InetAddress sender) {
+        post(new Runnable() { @Override public void run() {
+            boolean first = remote == null;
+            remote = r;
+            remoteAddress = null;
+            if (first) log("The sender offers remote control (DACP " + r.dacpId + ")");
+            views.refresh();
+        } });
+    }
+
+    // ---------------------------------------------------------------- lyrics and remote control
+
+    /** Look lyrics up a moment after the track settles, once per track. */
+    private void scheduleLyrics() {
+        if (!settings.lyrics || worker == null) return;
+        final NowPlaying n = np;
+        final String key = n.title + "\n" + n.artist + "\n" + n.album;
+        if (n.title.isEmpty() || n.artist.isEmpty()) return;
+        if (!key.equals(lyricsKey)) {
+            lyrics = null;
+            views.refresh();
+        } else if (lyrics != null) {
+            return;
+        }
+        lyricsKey = key;
+        if (lyricsLater != null) lyricsLater.cancel(false);
+        lyricsLater = worker.schedule(new Runnable() { @Override public void run() {
+            lyricsLater = null;
+            final NowPlaying now = np;
+            if (!key.equals(lyricsKey)) return;
+            final double duration = now.durationSeconds();
+            net.execute(new Runnable() { @Override public void run() {
+                Lyrics found = null;
+                try {
+                    found = new Lrclib(USER_AGENT).find(now.title, now.artist, now.album, duration);
+                } catch (Exception e) {
+                    log("Lyrics lookup failed: " + e.getMessage());
+                }
+                final Lyrics result = found;
+                post(new Runnable() { @Override public void run() {
+                    if (!key.equals(lyricsKey)) return;
+                    lyrics = result;
+                    log(result == null ? "No lyrics on LRCLIB for " + now.title
+                            : (result.synced ? "Synced" : result.instrumental ? "Instrumental" : "Plain") + " lyrics found for " + now.title);
+                    views.refresh();
+                } });
+            } });
+        } }, 1500, TimeUnit.MILLISECONDS);
+    }
+
+    /** Seconds into the track that the speaker plays right now, with the lyrics timing nudge. */
+    private double lyricsPosition() {
+        NowPlaying n = np;
+        double at;
+        AirPlayServer s = server;
+        long rtp = s == null ? Long.MIN_VALUE : s.playingRtp();
+        if (rtp != Long.MIN_VALUE && n.hasProgress()) {
+            at = Math.max(0, Math.min(((int) (rtp - n.startRtp())) / 44100.0, n.durationSeconds()));
+        } else {
+            at = n.elapsedSeconds(System.nanoTime());
+        }
+        return at + settings.lyricsOffset;
+    }
+
+    /** Play/pause or skip on the sender, over DACP. Runs on the network thread. */
+    private void remoteControl(final String command) {
+        final DacpRemote r = remote;
+        if (r == null) return;
+        net.execute(new Runnable() { @Override public void run() {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                java.net.InetSocketAddress address = remoteAddress;
+                if (address == null) {
+                    address = platform.findService("_dacp._tcp", r.serviceName(), 4000);
+                    if (address == null) {
+                        log("Could not find the sender's remote control (" + r.serviceName() + ") on the network");
+                        return;
+                    }
+                    remoteAddress = address;
+                }
+                try {
+                    int status = r.send(address, command);
+                    if (status != 200 && status != 204) log("The sender refused " + command + " (HTTP " + status + ")");
+                    return;
+                } catch (java.io.IOException e) {
+                    remoteAddress = null; // it may have moved: look it up again
+                    if (attempt == 1) log("Remote control failed: " + e.getMessage());
+                }
+            }
         } });
     }
 
