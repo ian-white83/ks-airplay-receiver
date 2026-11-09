@@ -28,7 +28,7 @@ import me.jxl.kiosk.plugins.PluginHost;
  * happens on one control thread so the KS callbacks return at once.
  */
 public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener {
-    static final String OVERLAY = "now-playing", FULL_OVERLAY = "now-playing-full";
+    static final String OVERLAY = "now_playing_card", FULL_OVERLAY = "now_playing_full";
     static final String TILE = "airplay";
 
     private PluginHost host;

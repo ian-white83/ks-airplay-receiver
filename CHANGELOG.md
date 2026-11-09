@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Fix: the floating and full-screen players never appeared. Their overlay names had hyphens, which Kiosk Satellite doesn't accept, so it refused to show them. The screensaver view wasn't affected.
+
 ## 0.5.0
 
 - New **Player style** setting: **Floating** or **Full screen**. The full-screen player now opens over the dashboard, so it works with the screensaver turned off.

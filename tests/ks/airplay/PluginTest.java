@@ -50,10 +50,14 @@ public final class PluginTest {
         @Override public void publishTextSensor(String key, String name, String state) { calls.add("text:" + key + "=" + state); }
         @Override public void publishBinarySensor(String key, String name, String deviceClass, Boolean state) { calls.add("binary:" + key + "=" + state); }
         @Override public void publishSwitch(String key, String name, boolean state) { calls.add("switch:" + key + "=" + state); }
-        @Override public void showOverlay(String key, OverlaySpec spec, OverlayFactory factory) { calls.add("overlay:" + key); }
-        @Override public void hideOverlay(String key) { calls.add("hide:" + key); }
+        // Kiosk Satellite's rule for overlay and screensaver keys.
+        static void validKey(String key) {
+            if (!key.matches("[a-z][a-z0-9_]{0,39}")) throw new IllegalArgumentException("Invalid key " + key);
+        }
+        @Override public void showOverlay(String key, OverlaySpec spec, OverlayFactory factory) { validKey(key); calls.add("overlay:" + key); }
+        @Override public void hideOverlay(String key) { validKey(key); calls.add("hide:" + key); }
         @Override public void fireTrigger(String id) { calls.add("trigger:" + id); }
-        @Override public void publishScreensaverView(String key, String title, OverlayFactory factory) { calls.add("screensaver:" + key); }
+        @Override public void publishScreensaverView(String key, String title, OverlayFactory factory) { validKey(key); calls.add("screensaver:" + key); }
         @Override public boolean isHeadless() { return false; }
         volatile Map<String, Object> shizuku;
         @Override public Map<String, Object> shizukuState() {
