@@ -43,6 +43,11 @@ public final class PtpClock {
         long offset, previousOffsetTime, mastershipStart, lastUpdate, lastHeard;
         boolean stepPending;
         long stepOffset;
+        /**
+         * For each earlier time base, how far the clock has stepped since: offset minus one of these is the
+         * clock in that base. Newest first, at most four.
+         */
+        long[] shifts = new long[0];
         int samples;
 
         Clock(long id) {
@@ -244,7 +249,14 @@ public final class PtpClock {
             }
         }
         c.stepPending = false;
-        if (step) log.log(String.format("PTP clock %016x stepped by %d ms", c.id, jump / 1_000_000L));
+        if (step) {
+            log.log(String.format("PTP clock %016x from %s stepped by %d ms", c.id, c.address == null ? "?" : c.address.getHostAddress(), jump / 1_000_000L));
+            int keep = Math.min(c.shifts.length, 3);
+            long[] next = new long[keep + 1];
+            next[0] = jump;
+            for (int i = 0; i < keep; i++) next[i + 1] = c.shifts[i] + jump;
+            c.shifts = next;
+        }
         if (step || c.previousOffsetTime == 0 || received - c.previousOffsetTime > DISCONTINUITY_NANOS) {
             c.offset = offset;
             c.mastershipStart = received;
@@ -297,7 +309,16 @@ public final class PtpClock {
                     + " from " + (chosen.address == null ? "?" : chosen.address.getHostAddress())
                     + (chosen == exact ? "" : chosen == follower ? " (a follower of it)" : " (the only clock heard)"));
         }
-        return chosen == null ? null : chosen.offset;
+        if (chosen == null) return null;
+        long fitted = fit(chosen, anchorNetwork, anchorLocal);
+        long base = fitted - chosen.offset;
+        if (base != loggedBase) {
+            loggedBase = base;
+            if (base != 0) log.log("Timeline " + Long.toHexString(timelineId) + " keeps its clock's earlier time base: the clock stepped by "
+                    + (-base / 1_000_000L) + " ms, but the sender's anchor is still in the old one");
+            else if (chosen.shifts.length > 0) log.log("Timeline " + Long.toHexString(timelineId) + " follows its clock's current time base");
+        }
+        return fitted;
     }
 
     private int evictions;
@@ -326,9 +347,34 @@ public final class PtpClock {
     private static Clock better(Clock a, Clock b, long anchorNetwork, long anchorLocal) {
         if (a == null) return b;
         if (anchorNetwork == Long.MIN_VALUE) return b.samples > a.samples ? b : a;
-        long da = Math.abs(anchorNetwork - a.offset - anchorLocal), db = Math.abs(anchorNetwork - b.offset - anchorLocal);
+        long da = Math.abs(anchorNetwork - fit(a, anchorNetwork, anchorLocal) - anchorLocal);
+        long db = Math.abs(anchorNetwork - fit(b, anchorNetwork, anchorLocal) - anchorLocal);
         return db < da ? b : a;
     }
+
+    /**
+     * The clock's offset in the time base the anchor was made in. A clock can step while the sender keeps playing
+     * on the anchor it gave before: an iPhone steps its clock by days when a first-generation HomePod joins the
+     * group, and doesn't send a new anchor. The clock keeps ticking at the same rate, so its readings minus the step
+     * still say when the old anchor plays. Of the current base and the earlier ones, the base that puts the anchor
+     * closest to when it arrived wins.
+     */
+    static long fit(Clock c, long anchorNetwork, long anchorLocal) {
+        if (anchorNetwork == Long.MIN_VALUE) return c.offset;
+        long best = c.offset;
+        long distance = Math.abs(anchorNetwork - best - anchorLocal);
+        for (long shift : c.shifts) {
+            long candidate = c.offset - shift;
+            long d = Math.abs(anchorNetwork - candidate - anchorLocal);
+            if (d < distance) {
+                best = candidate;
+                distance = d;
+            }
+        }
+        return best;
+    }
+
+    private long loggedBase = Long.MIN_VALUE;
 
     private Clock lastChosen;
     private long lastTimeline;

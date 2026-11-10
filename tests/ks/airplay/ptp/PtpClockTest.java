@@ -78,6 +78,13 @@ public final class PtpClockTest {
             group.handle(message(0x8, phone, 100 + i, sent + stepped), 44, from, sent + 350_000);
         }
         check(Math.abs(group.offset(phone) - stepped) < 1_000_000, "the step is followed: " + (group.offset(phone) - stepped));
+        // But an anchor the sender gave before the step stays in the old time base: the clock's readings minus the
+        // step still place it, so playback keeps going in sync instead of falling back to unsynced.
+        long anchorAt = System.nanoTime() - 2_000_000_000L;
+        Long kept = group.offset(phone, anchorAt + phoneTruth + 300_000_000L, anchorAt);
+        check(kept != null && Math.abs(kept - phoneTruth) < 1_000_000, "an anchor from before the step keeps the old base: " + (kept == null ? null : kept - phoneTruth));
+        Long fresh = group.offset(phone, anchorAt + stepped + 300_000_000L, anchorAt);
+        check(fresh != null && Math.abs(fresh - stepped) < 1_000_000, "a new anchor after the step uses the new base");
         long t2 = System.nanoTime() - 200_000_000L;
         for (int i = 0; i < 2; i++) {
             long sent = t2 + i * 50_000_000L;

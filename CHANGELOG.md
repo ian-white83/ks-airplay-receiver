@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1
+
+- Fix: Echos stuttered and kept dropping out after a first-generation HomePod joined the group, until the kiosk restarted. When the HomePod joins, the iPhone steps its clock by days but keeps playing on the anchor it gave before, so the plugin gave up on sync. It now keeps following the clock in the anchor's time base.
+- Fix: when the iPhone sets up the stream again, as when a speaker joins or leaves, the old and new sessions could write to Kiosk Satellite's output at once. The old one now stops first.
+- Fix: just after a flush, a stale playback timestamp could put the timing seconds out and cause repeated resyncs. Stale timestamps are ignored.
+- The log notes each playout resync (at most every 10 seconds) and which clock time base a timeline follows.
+
 ## 1.0.0
 
 Everything in 0.7.0, plus fixes from the Community Plugins security review. Needs Kiosk Satellite 2026.11.14 or later.

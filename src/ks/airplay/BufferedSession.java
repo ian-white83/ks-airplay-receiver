@@ -80,6 +80,7 @@ public final class BufferedSession {
     private static final long PLAUSIBLE_NANOS = 30 * 1_000_000_000L;
     private long rejectedTimeline = -1;
     private boolean fallbackRestarted;
+    private long lastResyncLog;
     // What is heard when: the RTP time of the last chunk scheduled and the local time it plays at.
     private volatile long heardRtp, heardAt, frozenRtp = Long.MIN_VALUE;
     private volatile boolean heard;
@@ -467,6 +468,12 @@ public final class BufferedSession {
                 if (started && Math.abs(error) > RESYNC_NANOS) {
                     started = false;
                     resyncs++;
+                    long t = System.nanoTime();
+                    if (t - lastResyncLog > 10_000_000_000L) {
+                        lastResyncLog = t;
+                        platform.log("Playout resync " + resyncs + ": audio was " + Math.abs(error) / 1_000_000L + " ms "
+                                + (error > 0 ? "late" : "early") + (warnedUnsynced ? " (playing without multi-room sync)" : ""));
+                    }
                 }
                 if (!started) {
                     if (error > duration) {

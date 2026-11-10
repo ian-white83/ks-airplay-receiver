@@ -83,9 +83,18 @@ public final class OutputTest {
         // Timing: frame 100 was heard 10 ms ago, so the next frame written (302) plays (302 - 100) frames later.
         long now = System.nanoTime();
         out.stampFrame = 100;
-        out.stampNanos = now - 10_000_000L;
+        out.stampNanos = now - 1_000_000L;
         long expected = out.stampNanos + (out.written - 100) * 1_000_000_000L / 44100;
         check(Math.abs(sink.nextPlayTime() - expected) < 1000, "next play time from the output's timestamp");
+        // A stale timestamp from before a flush is ignored.
+        sink.flush();
+        out.written = 50;
+        out.stampFrame = 100_000;
+        out.stampNanos = System.nanoTime() - 2_000_000L;
+        long t = System.nanoTime();
+        long guess = sink.nextPlayTime();
+        check(guess >= t + 50 * 1_000_000_000L / 44100 && guess < t + 200_000_000L, "a timestamp from before the flush is ignored: " + (guess - t));
+        out.flushes = 0;
         sink.close();
         check(!out.closed && out.flushes == 1, "closing the sink flushes but keeps KS's output for the next session");
         check(!sink.write(pcm, 0, 4), "a closed sink takes no more audio");

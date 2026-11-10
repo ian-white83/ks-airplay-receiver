@@ -13,20 +13,32 @@ public final class PlayerPlatform implements Platform {
     private final PluginPlayer player;
     private AudioOutput output;
     private int rate, channels;
+    private OutputSink current;
 
     public PlayerPlatform(Platform base, PluginPlayer player) {
         this.base = base;
         this.player = player;
     }
 
+    /**
+     * The output for a new session. A previous session's sink is closed first: when the sender sets up streams
+     * again, as when a speaker joins the group, the old session's player can still be writing, and two writers on one
+     * output would interleave their audio.
+     */
     @Override public synchronized AudioSink openSink(int sampleRate, int channels) {
+        if (current != null) {
+            OutputSink old = current;
+            current = null;
+            old.close();
+        }
         if (output == null || sampleRate != rate || channels != this.channels) {
             output = player.openAudio(sampleRate, channels, PluginPlayer.ENCODING_PCM_16);
             rate = sampleRate;
             this.channels = channels;
         }
         output.flush();
-        return new OutputSink(output, sampleRate, channels);
+        current = new OutputSink(output, sampleRate, channels);
+        return current;
     }
 
     @Override public AudioDecoder openDecoder(int ct, int samplesPerFrame) throws Exception { return base.openDecoder(ct, samplesPerFrame); }
