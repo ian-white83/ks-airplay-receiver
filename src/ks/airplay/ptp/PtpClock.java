@@ -219,21 +219,33 @@ public final class PtpClock {
 
     /**
      * The offset (clock time minus local monotonic time, in nanoseconds) of the clock an anchor names by its
-     * timeline ID, or null when no fresh sample exists. Falls back to the only fresh clock if the ID matches
-     * neither a clock nor a grandmaster.
+     * timeline ID, or null when no fresh sample exists. The clock whose own ID is the timeline comes first: a
+     * device that follows that clock as its grandmaster may still send its own local time (a first-generation
+     * HomePod does), hours away from the timeline's. Only without such a clock does a follower of that
+     * grandmaster stand in, and only without either the one fresh clock when there is exactly one.
      */
     public synchronized Long offset(long timelineId) {
         long now = System.nanoTime();
-        Clock only = null;
+        Clock exact = null, follower = null, only = null;
         int fresh = 0;
         for (Clock c : clocks.values()) {
             if (c.samples == 0 || now - c.lastUpdate > STALE_NANOS) continue;
-            if (c.id == timelineId || c.grandmaster == timelineId) return c.offset;
+            if (c.id == timelineId) exact = c;
+            else if (c.grandmaster == timelineId && follower == null) follower = c;
             fresh++;
             only = c;
         }
-        return fresh == 1 ? only.offset : null;
+        Clock chosen = exact != null ? exact : follower != null ? follower : fresh == 1 ? only : null;
+        if (chosen != null && (chosen.id != lastChosen || timelineId != lastTimeline)) {
+            lastChosen = chosen.id;
+            lastTimeline = timelineId;
+            log.log("Timeline " + Long.toHexString(timelineId) + " follows PTP clock " + Long.toHexString(chosen.id)
+                    + (chosen == exact ? "" : chosen == follower ? " (a follower of it)" : " (the only clock heard)"));
+        }
+        return chosen == null ? null : chosen.offset;
     }
+
+    private long lastChosen, lastTimeline;
 
     /**
      * Say hello to the group's other devices, as nqptp does when it learns the timing peers: two Announce

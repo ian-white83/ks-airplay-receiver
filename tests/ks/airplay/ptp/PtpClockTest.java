@@ -44,5 +44,25 @@ public final class PtpClockTest {
         for (int k = 0; k < 8; k++) announce[53 + k] = (byte) (gm >>> (56 - 8 * k));
         clock.handle(announce, 64, from, System.nanoTime());
         check(clock.offset(gm) != null, "grandmaster ID resolves to its clock");
+
+        // A HomePod that follows the iPhone's clock as grandmaster but sends its own local time, hours away.
+        // The iPhone's own clock must win for the iPhone's timeline, whatever order the clocks are stored in.
+        PtpClock group = new PtpClock(new PtpClock.Log() { @Override public void log(String m) {} }, 0, 0);
+        long phone = 0xCC817D8E2D040008L, homePod = 0xD4A33D8165D70008L;
+        long phoneTruth = 50_000_000_000_000L, homePodTruth = phoneTruth - 30_608_000_000_000L;
+        long t0 = System.nanoTime() - 2_000_000_000L;
+        for (int i = 0; i < 16; i++) {
+            long sent = t0 + i * 125_000_000L;
+            group.handle(message(0x0, homePod, i, 0), 44, from, sent + 300_000);
+            group.handle(message(0x8, homePod, i, sent + homePodTruth), 44, from, sent + 350_000);
+            group.handle(message(0x0, phone, i, 0), 44, from, sent + 300_000);
+            group.handle(message(0x8, phone, i, sent + phoneTruth), 44, from, sent + 350_000);
+        }
+        byte[] follows = message(0xB, homePod, 1, 0);
+        for (int k = 0; k < 8; k++) follows[53 + k] = (byte) (phone >>> (56 - 8 * k));
+        group.handle(follows, 64, from, System.nanoTime());
+        Long phoneOffset = group.offset(phone);
+        check(phoneOffset != null && Math.abs(phoneOffset - phoneTruth) < 1_000_000, "the timeline's own clock wins over a follower: " + phoneOffset);
+        check(Math.abs(group.offset(homePod) - homePodTruth) < 1_000_000, "the follower keeps its own offset");
     }
 }

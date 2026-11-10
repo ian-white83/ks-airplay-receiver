@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.4
+
+- Fix: adding a first-generation HomePod to a group made the kiosks drop out or play out of sync. The HomePod follows the iPhone's clock but sends its own time, hours away, and the plugin sometimes followed the HomePod instead of the iPhone. The clock the sender names now always comes first.
+- The log says which PTP clock each timeline follows.
+
 ## 0.6.3
 
 - Fix: with Fleet Management, the iPhone listed only one of the kiosks and grouped audio could go to the wrong one. The plugin saved a random AirPlay device ID as a setting, and the fleet copied the leader's to every kiosk. The ID is now made from each device, so every kiosk has its own. Apple devices see each kiosk as a new speaker once.
