@@ -49,7 +49,12 @@ public final class PtpClock {
     private final Log log;
     private final int eventPort, generalPort;
     private final long selfId;
-    private final Map<Long, Clock> clocks = new HashMap<>();
+    /**
+     * By clock ID and sender address. Two devices can send under one clock ID: with a first-generation HomePod
+     * in the group, the HomePod sends Sync carrying the iPhone's clock ID but its own time, days away. Mixed
+     * into one record, its readings would drag the iPhone's clock off.
+     */
+    private final Map<String, Clock> clocks = new HashMap<>();
     private DatagramSocket event, general;
     private Thread eventThread, generalThread;
     private volatile boolean running;
@@ -162,10 +167,11 @@ public final class PtpClock {
         packets++;
         Clock wake = null;
         synchronized (this) {
-            Clock c = clocks.get(clockId);
+            String key = clockId + "@" + from.getHostAddress();
+            Clock c = clocks.get(key);
             if (c == null) {
                 c = new Clock(clockId);
-                clocks.put(clockId, c);
+                clocks.put(key, c);
                 log.log(String.format("PTP clock %016x found at %s", clockId, from.getHostAddress()));
             }
             c.address = from;
@@ -240,35 +246,50 @@ public final class PtpClock {
         c.samples++;
     }
 
+    /** As offset(timelineId, anchorNetwork, anchorLocal), without an anchor to choose between senders by. */
+    public Long offset(long timelineId) {
+        return offset(timelineId, Long.MIN_VALUE, 0);
+    }
+
     /**
      * The offset (clock time minus local monotonic time, in nanoseconds) of the clock an anchor names by its
-     * timeline ID, or null when no fresh sample exists. The clock whose own ID is the timeline comes first: a
-     * device that follows that clock as its grandmaster may still send its own local time (a first-generation
-     * HomePod does), hours away from the timeline's. Only without such a clock does a follower of that
-     * grandmaster stand in, and only without either the one fresh clock when there is exactly one.
+     * timeline ID, or null when no fresh sample exists. The clock whose own ID is the timeline comes first; a
+     * follower of it (its grandmaster is the timeline) stands in only without one, and the one fresh clock only
+     * without either. When several senders use that ID, the one whose time puts the anchor (network time
+     * anchorNetwork, received at local time anchorLocal) closest to when it arrived wins; without an anchor,
+     * the one with the most samples.
      */
-    public synchronized Long offset(long timelineId) {
+    public synchronized Long offset(long timelineId, long anchorNetwork, long anchorLocal) {
         long now = System.nanoTime();
         Clock exact = null, follower = null, only = null;
         int fresh = 0;
         for (Clock c : clocks.values()) {
             if (c.samples == 0 || now - c.lastUpdate > STALE_NANOS) continue;
-            if (c.id == timelineId) exact = c;
-            else if (c.grandmaster == timelineId && follower == null) follower = c;
+            if (c.id == timelineId) exact = better(exact, c, anchorNetwork, anchorLocal);
+            else if (c.grandmaster == timelineId) follower = better(follower, c, anchorNetwork, anchorLocal);
             fresh++;
             only = c;
         }
         Clock chosen = exact != null ? exact : follower != null ? follower : fresh == 1 ? only : null;
-        if (chosen != null && (chosen.id != lastChosen || timelineId != lastTimeline)) {
-            lastChosen = chosen.id;
+        if (chosen != null && (chosen != lastChosen || timelineId != lastTimeline)) {
+            lastChosen = chosen;
             lastTimeline = timelineId;
             log.log("Timeline " + Long.toHexString(timelineId) + " follows PTP clock " + Long.toHexString(chosen.id)
+                    + " from " + (chosen.address == null ? "?" : chosen.address.getHostAddress())
                     + (chosen == exact ? "" : chosen == follower ? " (a follower of it)" : " (the only clock heard)"));
         }
         return chosen == null ? null : chosen.offset;
     }
 
-    private long lastChosen, lastTimeline;
+    private static Clock better(Clock a, Clock b, long anchorNetwork, long anchorLocal) {
+        if (a == null) return b;
+        if (anchorNetwork == Long.MIN_VALUE) return b.samples > a.samples ? b : a;
+        long da = Math.abs(anchorNetwork - a.offset - anchorLocal), db = Math.abs(anchorNetwork - b.offset - anchorLocal);
+        return db < da ? b : a;
+    }
+
+    private Clock lastChosen;
+    private long lastTimeline;
 
     /**
      * Say hello to the group's other devices, as nqptp does when it learns the timing peers: two Announce

@@ -458,6 +458,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     private static BufferedSession.Clock clockFor(final PtpClock clock) {
         return new BufferedSession.Clock() {
             @Override public Long offset(long timelineId) { return clock.offset(timelineId); }
+            @Override public Long offset(long timelineId, long anchorNetwork, long anchorLocal) { return clock.offset(timelineId, anchorNetwork, anchorLocal); }
             @Override public void peers(java.util.List<String> addresses) { clock.peers(addresses); }
         };
     }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.6
+
+- Fix: playing to kiosks first and then adding a first-generation HomePod still put them out of sync. The HomePod sends timing under the iPhone's clock ID but with its own time, days away, and the plugin mixed those readings with the iPhone's. Clocks are now kept apart per sender, and when two senders use one ID, the one whose time fits the audio's anchor is followed. The log names the sender.
+
 ## 0.6.5
 
 - Fix: kiosks still played out of sync, or dropped out, with a first-generation HomePod in the group. When the HomePod joins, the iPhone steps its clock by hours to follow it, and the plugin's smoothing let the clock move back only a fraction of a millisecond at a time. A jump of more than a second that two readings agree on is now taken at once, in either direction, and logged.

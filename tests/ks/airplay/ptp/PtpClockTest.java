@@ -90,5 +90,22 @@ public final class PtpClockTest {
         group.handle(message(0x0, phone, 300, 0), 44, from, t3 + 100_000_000L);
         group.handle(message(0x8, phone, 300, t3 + phoneTruth), 44, from, t3 + 100_050_000L);
         check(Math.abs(group.offset(phone) - phoneTruth) < 1_000_000, "a late packet barely moves the offset");
+
+        // The HomePod also sends Sync under the iPhone's clock ID, with its own time 489739 s away. Its readings
+        // stay apart from the iPhone's, and the anchor picks the sender whose time fits it.
+        InetAddress homePodIp = InetAddress.getByName("127.0.0.2");
+        long impostor = phoneTruth + 489_739_618_000_000L;
+        long t4 = System.nanoTime() - 500_000_000L;
+        for (int i = 0; i < 4; i++) {
+            long sent = t4 + i * 125_000_000L;
+            group.handle(message(0x0, phone, 400 + i, 0), 44, homePodIp, sent + 300_000);
+            group.handle(message(0x8, phone, 400 + i, sent + impostor), 44, homePodIp, sent + 350_000);
+            group.handle(message(0x0, phone, 500 + i, 0), 44, from, sent + 300_000);
+            group.handle(message(0x8, phone, 500 + i, sent + phoneTruth), 44, from, sent + 350_000);
+        }
+        long anchorLocal = System.nanoTime(), anchorNetwork = anchorLocal + phoneTruth + 100_000_000L;
+        Long picked = group.offset(phone, anchorNetwork, anchorLocal);
+        check(picked != null && Math.abs(picked - phoneTruth) < 1_000_000, "the anchor picks the iPhone's readings: " + picked);
+        check(Math.abs(group.offset(phone, anchorLocal + impostor, anchorLocal) - impostor) < 1_000_000, "and the other sender's when its time fits");
     }
 }

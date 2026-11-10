@@ -29,6 +29,9 @@ public final class BufferedSession {
         /** Clock time minus System.nanoTime(), in nanoseconds, or null if unknown. */
         Long offset(long timelineId);
 
+        /** The same, choosing among senders of one clock ID the one whose time fits this anchor. */
+        default Long offset(long timelineId, long anchorNetwork, long anchorLocal) { return offset(timelineId); }
+
         /** SETPEERS: the addresses of the other devices in the group, whose clocks may lead it. */
         default void peers(java.util.List<String> addresses) {}
     }
@@ -423,7 +426,7 @@ public final class BufferedSession {
                         }
                         continue;
                     }
-                    Long off = clock == null ? null : clock.offset(anchorTimeline);
+                    Long off = clock == null ? null : clock.offset(anchorTimeline, anchorNetwork, anchorReceived);
                     if (off != null && Math.abs(anchorNetwork - off - anchorReceived) > PLAUSIBLE_NANOS) {
                         if (rejectedTimeline != anchorTimeline) {
                             rejectedTimeline = anchorTimeline;
