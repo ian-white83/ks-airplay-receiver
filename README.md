@@ -2,6 +2,14 @@
 
 Turns a [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) kiosk into an AirPlay 2 speaker that you can group with HomePods, Apple TVs and other AirPlay 2 speakers. Pick several speakers in the AirPlay menu on an iPhone, iPad or Mac and they play in sync.
 
+> **⚠️ Updating to 0.7.0? This is a big change. Do this after you update:**
+>
+> 1. **Update Kiosk Satellite to 2026.11.14 or later first.** 0.7.0 doesn't run on older versions.
+> 2. **Pick the plugin as your player:** open **Settings > Media Player > Player** and choose **AirPlay 2**. Until you do, the kiosk won't show up as an AirPlay speaker.
+> 3. **Set up Now Playing, lyrics and ducking in Kiosk Satellite.** The plugin no longer draws its own floating player, full-screen player, screensaver view or lyrics. Kiosk Satellite's own Now Playing does all of that now, from its **Settings > Media Player** settings. The plugin's **Lower AirPlay while the assistant talks**, **Wake the screen** and **Now Playing** settings are gone, along with the **AirPlay receiver** switch and the track sensors in Home Assistant (use Kiosk Satellite's media player entity instead).
+>
+> Your Shizuku setup, boot start, speaker name and audio offset carry over unchanged. See the [changelog](CHANGELOG.md) for everything that changed.
+
 It's an AirPlay 2 player for Kiosk Satellite's Media Player. Pick it under **Settings > Media Player > Player**, in place of Kiosk Satellite's built-in AirPlay receiver: that one plays to a single speaker, while this one adds AirPlay 2 buffered audio locked to the sender's clock, so the kiosk can be part of a group.
 
 - Groups with other AirPlay 2 speakers for multi-room audio.
