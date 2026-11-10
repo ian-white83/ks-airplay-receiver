@@ -43,6 +43,27 @@ public final class Util {
         return sb.toString();
     }
 
+    /** Decode standard base64, padding optional, whitespace ignored. */
+    public static byte[] unbase64(String text) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(text.length() * 3 / 4);
+        int bits = 0, value = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '=') break;
+            if (Character.isWhitespace(c)) continue;
+            int v = B64.indexOf(c);
+            if (v < 0) throw new IllegalArgumentException("Not base64: " + c);
+            value = value << 6 | v;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                out.write(value >> bits & 0xff);
+                value &= (1 << bits) - 1;
+            }
+        }
+        return out.toByteArray();
+    }
+
     public static String hex(byte[] bytes) {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) sb.append(Character.forDigit((b >> 4) & 15, 16)).append(Character.forDigit(b & 15, 16));

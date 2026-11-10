@@ -122,13 +122,13 @@ Shizuku stops whenever the kiosk restarts. The plugin can start it again by itse
 2. The button in the **Shizuku** section should say **Started**, because Shizuku already runs as root. Tap it: it checks the path and should report that the boot start can reach ADB as root. The **Shizuku** status under it shows the current state.
 3. Restart the kiosk. About a minute after Kiosk Satellite comes up, **Shizuku** should say **Running as root** again and **AirPlay multi-room** **Multi-room ready**.
 
-If Android shows **Allow USB debugging?** for the plugin's key (`ks-airplay@kiosk`), tick **Always allow** and tap **Allow**.
+If Android shows **Allow USB debugging?** for the plugin's key (`ks-airplay@kiosk`), tick **Always allow** and tap **Allow**. It should not ask again after a restart; if it does, see Troubleshooting. At boot the plugin keeps asking for up to ten minutes, so there's time to get to the screen.
 
 You can now unplug or close the computer. Every time the kiosk boots, the plugin connects to its own ADB on 127.0.0.1:5555, switches it to root and runs Shizuku's starter, the same as the commands in step 5.
 
 The plugin finds Shizuku's starter by itself. If a Shizuku version puts it somewhere else, paste the command from **Shizuku > Start via connected computer > View command** into **Shizuku start command** under Advanced.
 
-The plugin's ADB key gives root through ADB, like the key of a computer you allowed. It stays in Kiosk Satellite's private, no-backup storage. To revoke it, use **Revoke USB debugging authorizations** in Developer options. That also removes your computer's key.
+The plugin's ADB key gives root through ADB, like the key of a computer you allowed. It lives in the plugin's **ADB key** setting under Advanced, a secret setting that Kiosk Satellite masks everywhere, so it stays the same from boot to boot and Android only asks once. Kiosk Satellite's configuration exports and Fleet Management's plugin secrets include it, like any other secret setting, so keep those private. To make a new key, clear **ADB key**. To revoke the key, use **Revoke USB debugging authorizations** in Developer options. That also removes your computer's key.
 
 ### 9. Play to a group
 
@@ -262,6 +262,7 @@ Check the **Shizuku** status and the **AirPlay multi-room** reading on the plugi
 - **"adbd cannot run as root" or "ADB cannot switch to root"** Turn on **Rooted debugging** in Developer options.
 - **"Nothing answers on 127.0.0.1:5555"** ADB isn't listening on port 5555. Turn on **ADB over network**, or run `adb tcpip 5555` from a computer, then tap **Start** again.
 - **"Nobody allowed USB debugging"** The approval prompt timed out. Tap **Start** and approve **Allow USB debugging?** on the kiosk within a minute.
+- **"Allow USB debugging?" at every restart, with a different fingerprint each time.** Versions 0.4.0 to 0.6.1 lost their ADB key at each restart. Update, tick **Always allow** once more, and it stops.
 - **Shizuku says "Running as shell, not root".** It was started without `adb root`. Tap **Start**: the plugin restarts it as root.
 
 - **"start Shizuku as root…"** Shizuku isn't running, KS has no access, or Shizuku is running as shell (uid 2000) rather than root (uid 0).

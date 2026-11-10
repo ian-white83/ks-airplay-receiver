@@ -192,6 +192,20 @@ public final class AdbTest {
         v.update(data);
         check(v.verify(key.sign(token)), "signature verifies as SHA1withRSA");
 
+        // The key survives as a secret setting: same public key and signatures after a round trip.
+        String secret = key.toSecret();
+        check(secret.startsWith("v1:") && secret.length() <= 512, "secret fits a 512-character setting: " + secret.length());
+        AdbKey again = AdbKey.fromSecret(secret, "ks-airplay@kiosk");
+        check(again.publicKey().equals(key.publicKey()), "same public key from the secret");
+        check(java.util.Arrays.equals(again.sign(token), key.sign(token)), "same signature from the secret");
+        for (int i = 0; i < 5; i++) {
+            AdbKey k = AdbKey.generate("x");
+            check(AdbKey.fromSecret(k.toSecret(), "x").publicKey().equals(k.publicKey()), "round trip " + i);
+        }
+        byte[] raw = new byte[257];
+        new SecureRandom().nextBytes(raw);
+        check(java.util.Arrays.equals(ks.airplay.Util.unbase64(ks.airplay.Util.base64(raw)), raw), "base64 round trip");
+
         FakeAdbd adbd = new FakeAdbd();
         int port = adbd.server.getLocalPort();
         List<String> steps = new ArrayList<>();

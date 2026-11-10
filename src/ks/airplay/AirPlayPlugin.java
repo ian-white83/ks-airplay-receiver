@@ -131,6 +131,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         boolean shizukuAtBoot = false;
         String shizukuCommand = "";
         boolean shizukuRunning = false;
+        String adbKey = "";
 
         static Settings from(Map<String, Object> map) {
             Settings s = new Settings();
@@ -157,6 +158,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             s.shizukuAtBoot = bool(map, "shizukuAtBoot", s.shizukuAtBoot);
             s.shizukuCommand = string(map, "shizukuCommand", "").trim();
             s.shizukuRunning = bool(map, "shizukuRunning", false);
+            s.adbKey = string(map, "adbKey", "").trim();
             return s;
         }
 
@@ -233,6 +235,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         if (!AirPlayConfig.validDeviceId(next.deviceId)) {
             ensureDeviceId(raw);
             return;
+        }
+        if (previous != null && !next.adbKey.equals(previous.adbKey) && !next.adbKey.equals(savedKey)) {
+            // Cleared or replaced by the user: use (or make) that key from now on.
+            post(new Runnable() { @Override public void run() { adbKey = null; keyInstalled = false; prepareBootStart(); } });
         }
         if (previous != null && next.shizukuRunning != previous.shizukuRunning) {
             post(new Runnable() { @Override public void run() { refreshShizuku(null); } });
@@ -606,13 +612,44 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         }
     }
 
+    /**
+     * The plugin's ADB key. It lives in the plugin's secret ADB key setting, which Kiosk Satellite keeps across
+     * restarts and masks everywhere. Android remembers a key it allowed, so it must stay the same from boot to boot.
+     */
     private AdbKey adbKey() throws Exception {
-        if (adbKey == null) {
-            java.io.File dir = platform.dataDir();
-            adbKey = dir != null ? AdbKey.loadOrCreate(new java.io.File(dir, "adbkey"), "ks-airplay@kiosk") : AdbKey.generate("ks-airplay@kiosk");
+        if (adbKey != null) return adbKey;
+        String saved = settings.adbKey;
+        if (!saved.isEmpty()) {
+            try {
+                adbKey = AdbKey.fromSecret(saved, KEY_NAME);
+                return adbKey;
+            } catch (Exception e) {
+                log("The saved ADB key is unreadable, making a new one: " + e.getMessage());
+            }
         }
+        AdbKey k = AdbKey.generate(KEY_NAME);
+        String secret = k.toSecret();
+        try {
+            host.updateSettings(Collections.<String, Object>singletonMap("adbKey", secret));
+            settings.adbKey = secret;
+            savedKey = secret;
+            log("Made a new ADB key and saved it in the plugin's settings. Android asks once to allow it.");
+        } catch (RuntimeException | LinkageError e) {
+            // Older Kiosk Satellite: keep it in a file instead.
+            java.io.File dir = platform.dataDir();
+            if (dir == null) {
+                log("Could not save the ADB key (" + e + "): Android will ask to allow it again after a restart");
+            } else {
+                k = AdbKey.loadOrCreate(new java.io.File(dir, "adbkey"), KEY_NAME);
+                log("Could not save the ADB key in settings (" + e + "); kept it in " + dir);
+            }
+        }
+        adbKey = k;
         return adbKey;
     }
+
+    static final String KEY_NAME = "ks-airplay@kiosk";
+    private String savedKey = "";
 
     /**
      * While Shizuku already runs as root, trust this plugin's ADB key and keep adbd on port 5555 across reboots,
@@ -628,8 +665,12 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             return;
         }
         keyInstalled = true;
+        // Trust this key and drop keys earlier versions of the plugin left behind (they made a new one each boot).
         String script = "k='" + line + "'; f=/data/misc/adb/adb_keys\n"
-                + "if ! grep -qF \"$k\" \"$f\" 2>/dev/null; then echo \"$k\" >> \"$f\" && chown system:shell \"$f\"; chmod 640 \"$f\"; restorecon \"$f\" 2>/dev/null; echo 'trusted the ADB key'; fi\n"
+                + "if ! grep -qxF \"$k\" \"$f\" 2>/dev/null || [ \"$(grep -c ' " + KEY_NAME + "$' \"$f\")\" != 1 ]; then\n"
+                + "  { grep -v ' " + KEY_NAME + "$' \"$f\" 2>/dev/null; echo \"$k\"; } > \"$f.tmp\" && cat \"$f.tmp\" > \"$f\"; rm -f \"$f.tmp\"\n"
+                + "  chown system:shell \"$f\"; chmod 640 \"$f\"; restorecon \"$f\" 2>/dev/null; echo 'trusted the ADB key'\n"
+                + "fi\n"
                 + "[ \"$(getprop persist.adb.tcp.port)\" = " + ShizukuStarter.PORT + " ] || { setprop persist.adb.tcp.port " + ShizukuStarter.PORT + "; echo 'kept ADB on port " + ShizukuStarter.PORT + "'; }\n"
                 + "exit 0";
         try {
@@ -681,7 +722,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
                 String error = null, output = "";
+                // At boot nobody may be at the screen to allow the key: keep asking for up to ten minutes.
+                int attempts = run == null ? 10 : 1;
+                for (int attempt = 1; attempt <= attempts; attempt++) {
                 try {
+                    error = null;
                     output = new ShizukuStarter(key).run(command, alreadyRunning, run == null ? 120000 : 10000, 60000, new ShizukuStarter.Progress() {
                         @Override public boolean report(String message) {
                             if (Thread.currentThread().isInterrupted()) return false;
@@ -693,10 +738,25 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                             return run.equals(starterRun.get()) && setup(run, "running", message);
                         }
                     });
+                    break;
                 } catch (ShizukuStarter.Stopped e) {
                     error = "";
+                    break;
+                } catch (ks.airplay.adb.AdbClient.NotApproved e) {
+                    error = e.getMessage();
+                    if (attempt < attempts) {
+                        log("Shizuku: " + error + ". Asking again in 30 seconds. Tick Always allow, then Allow.");
+                        try {
+                            Thread.sleep(30000);
+                        } catch (InterruptedException ie) {
+                            error = "";
+                            break;
+                        }
+                    }
                 } catch (Exception e) {
                     error = e.getMessage() == null ? e.toString() : e.getMessage();
+                    break;
+                }
                 }
                 final String err = error, out = output;
                 starter = null;

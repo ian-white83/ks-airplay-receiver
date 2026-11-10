@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2
+
+- Fix: Android asked "Allow USB debugging?" at every restart, with a new fingerprint each time, and multi-room stayed off until someone answered. The plugin lost its ADB key at each restart. It now keeps it in a secret **ADB key** setting under Advanced, so Android asks once. Clear the setting to make a new key.
+- At boot, if nobody answers the prompt, the plugin asks again every 30 seconds for up to ten minutes instead of giving up.
+- The keys earlier versions left in Android's trusted ADB keys are removed.
+
 ## 0.6.1
 
 - Fix: play/pause and skip buttons didn't show. The plugin only took the sender's remote-control details from the audio connection; iPhones may send them on a separate remote-control connection. It now takes them from either, and keeps them between sessions.

@@ -48,6 +48,28 @@ public final class AdbKey {
         return new AdbKey((RSAPrivateCrtKey) KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(der)), name);
     }
 
+    /**
+     * The key as text that fits a 512-character secret setting: its two primes, from which the rest is rebuilt.
+     * "v1:" + base64(p) + ":" + base64(q).
+     */
+    public String toSecret() {
+        return "v1:" + Util.base64(key.getPrimeP().toByteArray()) + ":" + Util.base64(key.getPrimeQ().toByteArray());
+    }
+
+    public static AdbKey fromSecret(String secret, String name) throws GeneralSecurityException {
+        String[] parts = secret.trim().split(":");
+        if (parts.length != 3 || !"v1".equals(parts[0])) throw new GeneralSecurityException("Not a saved ADB key");
+        BigInteger p = new BigInteger(1, Util.unbase64(parts[1]));
+        BigInteger q = new BigInteger(1, Util.unbase64(parts[2]));
+        BigInteger e = BigInteger.valueOf(RSAKeyGenParameterSpec.F4.longValue());
+        BigInteger n = p.multiply(q);
+        BigInteger phi = p.subtract(BigInteger.ONE).multiply(q.subtract(BigInteger.ONE));
+        BigInteger d = e.modInverse(phi);
+        java.security.spec.RSAPrivateCrtKeySpec spec = new java.security.spec.RSAPrivateCrtKeySpec(n, e, d, p, q,
+                d.mod(p.subtract(BigInteger.ONE)), d.mod(q.subtract(BigInteger.ONE)), q.modInverse(p));
+        return new AdbKey((RSAPrivateCrtKey) KeyFactory.getInstance("RSA").generatePrivate(spec), name);
+    }
+
     /** The key saved in file, or a new one written there with owner-only permissions. */
     public static AdbKey loadOrCreate(File file, String name) throws IOException, GeneralSecurityException {
         if (file.isFile()) {

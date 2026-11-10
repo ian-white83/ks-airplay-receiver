@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
@@ -201,6 +201,14 @@
       "default": false,
       "group": "Advanced",
       "description": "Set by the plugin to switch the Shizuku button between Start and Started. Changing it here has no effect."
+    },
+    {
+      "key": "adbKey",
+      "type": "secret",
+      "title": "ADB key",
+      "default": "",
+      "group": "Advanced",
+      "description": "Set by the plugin when Start Shizuku as root at boot is on: the key it signs in to this device's ADB with, kept here so Android only asks once to allow it. Clear it to make a new key; Android then asks again."
     }
   ],
   "commands": [

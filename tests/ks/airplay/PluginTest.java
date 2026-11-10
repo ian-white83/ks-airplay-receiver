@@ -153,9 +153,14 @@ public final class PluginTest {
         root.put("available", true);
         root.put("granted", true);
         root.put("uid", 0);
+        settings.put("shizukuAtBoot", true);
+        plugin.configure(settings);
         host.shizuku = root;
         plugin.onEvent("shizuku.state", root);
         waitForCall(host, "text:shizuku=Running as root");
+        // Boot start on and Shizuku root: the plugin makes its ADB key, keeps it in its secret setting and trusts it.
+        waitFor(() -> String.valueOf(host.saved.get("adbKey")).startsWith("v1:"), "ADB key saved in settings");
+        waitForCall(host, "shizuku-exec");
         waitFor(() -> Boolean.TRUE.equals(host.saved.get("shizukuRunning")), "Started button shown");
         settings.put("shizukuRunning", false); // someone flips the flag by hand
         host.saved.put("shizukuRunning", false);
