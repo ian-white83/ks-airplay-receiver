@@ -29,6 +29,17 @@ public final class AndroidPlatform implements Platform {
 
     @Override public void log(String message) { logger.log(message); }
 
+    @Override public String deviceSeed() {
+        try {
+            String id = android.provider.Settings.Secure.getString(Bonjour.applicationContext().getContentResolver(),
+                    android.provider.Settings.Secure.ANDROID_ID);
+            // 9774d56d682e549c is the one ID some old devices share.
+            return id == null || id.isEmpty() || "9774d56d682e549c".equals(id) ? null : id;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** Browse with Android's NsdManager until the named instance turns up, then resolve its address and port. */
     @Override public java.net.InetSocketAddress findService(final String type, final String name, int timeoutMs) {
         final android.net.nsd.NsdManager nsd;

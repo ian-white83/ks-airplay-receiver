@@ -204,7 +204,7 @@ Kiosk Satellite's built-in floating player and Now Playing view can't show this 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Port | 7100 | TCP port for AirPlay connections. The default keeps clear of Kiosk Satellite's own receiver |
-| AirPlay device ID | generated | Created on first start and saved. Clear it to make Apple devices see the kiosk as a new speaker |
+| AirPlay device ID | empty | Empty: made from this device, so every kiosk has its own. Only for troubleshooting; Fleet Management copies a value set here to every kiosk on the profile |
 | Feature flags | empty | For troubleshooting only. Empty advertises `0x401FCA00,0x1C340`, the set shairport-sync uses |
 | Shizuku is running as root | set by the plugin | Switches the button between **Start** and **Started**. The plugin keeps it in step with Shizuku, so changing it has no effect |
 | Shizuku start command | empty | Empty finds Shizuku's starter automatically. Otherwise the command from **Shizuku > Start via connected computer > View command** |
@@ -224,6 +224,16 @@ The plugin adds these entities to the kiosk's ESPHome device:
 | Shizuku | Text sensor | Whether Shizuku runs as root, as shell or not at all, or is starting |
 
 The Remote Admin Overview also gets an **AirPlay** status tile.
+
+## Fleet Management
+
+Fleet Management copies a plugin's settings from the leader to every kiosk on the profile, apart from secret settings. The plugin keeps what must differ per kiosk out of its settings:
+
+- **The AirPlay device ID** is made from each device, so every kiosk shows up as its own speaker. Versions before 0.6.3 saved a random ID as a setting, which the fleet copied, so the iPhone saw several kiosks as one and listed only one of them.
+- **The ADB key** is a secret setting, so each kiosk keeps its own unless the profile includes **Plugin secrets**. Either way works.
+- **Speaker name**: leave it empty, so each kiosk uses its own device name. A name set on the leader is copied to every kiosk.
+
+**Audio offset** is copied too. If one kiosk needs its own, set it on the leader to suit most of them, or take the plugin out of that kiosk's profile.
 
 ## Playback controls
 

@@ -53,6 +53,21 @@ public final class AirPlayConfig {
         return format(b, ":");
     }
 
+    /**
+     * A device ID made from something unique to this device, so each kiosk gets its own and keeps it, even when
+     * Fleet Management copies plugin settings between kiosks. A locally administered unicast MAC-style address.
+     */
+    public static String deviceIdFrom(String seed) {
+        try {
+            byte[] h = java.security.MessageDigest.getInstance("SHA-256").digest(("ks-airplay-receiver/device-id:" + seed).getBytes(Util.UTF8));
+            byte[] b = java.util.Arrays.copyOf(h, 6);
+            b[0] = (byte) ((b[0] & 0xfc) | 0x02);
+            return format(b, ":");
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new AssertionError(e);
+        }
+    }
+
     public static boolean validDeviceId(String id) {
         return id != null && id.trim().toUpperCase(java.util.Locale.ROOT).matches("([0-9A-F]{2}[:-]?){5}[0-9A-F]{2}");
     }

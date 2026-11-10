@@ -48,6 +48,8 @@ public final class FlowTest {
         final List<String> logs = new CopyOnWriteArrayList<>();
         volatile float gain = -1;
         final ByteArrayOutputStream pcm = new ByteArrayOutputStream();
+        volatile String seed;
+        @Override public String deviceSeed() { return seed; }
         final List<long[]> segments = new ArrayList<>(); // {first sample index, play time of that sample}
         long writtenFrames;
         boolean laggyDecoder; // behave like AAC through MediaCodec: one packet late, sometimes two at once

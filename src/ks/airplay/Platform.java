@@ -39,6 +39,9 @@ public interface Platform {
     /** A private folder for files the plugin keeps between sessions, or null to keep nothing. */
     default java.io.File dataDir() { return null; }
 
+    /** Something stable and unique to this device (Android's ANDROID_ID), or null when there is none. */
+    default String deviceSeed() { return null; }
+
     /** Find a Bonjour service by type (like "_dacp._tcp") and instance name. Blocks up to timeoutMs; null if not found. */
     default java.net.InetSocketAddress findService(String type, String name, int timeoutMs) { return null; }
 }

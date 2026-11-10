@@ -127,6 +127,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         String fullScreen = "When the screensaver starts";
         int port = 7100;
         String deviceId = "";
+        String deviceIdOverride = "";
         String features = "";
         boolean shizukuAtBoot = false;
         String shizukuCommand = "";
@@ -154,6 +155,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 s.port = 7100;
             }
             s.deviceId = string(map, "deviceId", "").trim();
+            s.deviceIdOverride = string(map, "deviceIdOverride", "").trim();
             s.features = string(map, "features", "").trim();
             s.shizukuAtBoot = bool(map, "shizukuAtBoot", s.shizukuAtBoot);
             s.shizukuCommand = string(map, "shizukuCommand", "").trim();
@@ -210,7 +212,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 @Override public void log(String message) { AirPlayPlugin.this.log(message); }
             });
         }
+        String seed = platform.deviceSeed();
+        seedDeviceId = seed == null ? null : AirPlayConfig.deviceIdFrom(seed);
         settings = Settings.from(raw);
+        applyDeviceId(settings);
         publishEntities();
         publishFullScreen();
         try {
@@ -229,6 +234,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     @Override
     public void configure(Map<String, Object> raw) {
         final Settings next = Settings.from(raw);
+        applyDeviceId(next);
         final Settings previous = settings;
         settings = next;
         if (worker == null) return;
@@ -357,6 +363,18 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     }
 
     // ---------------------------------------------------------------- receiver control (worker thread)
+
+    /** Made from this device when Android gives an ID, so Fleet Management can't copy it to other kiosks. */
+    private String seedDeviceId;
+
+    /**
+     * The device ID to advertise: the override setting when set, otherwise one made from this device. Only without
+     * a device ID from Android (tests) does it fall back to the random ID saved in the old deviceId setting.
+     */
+    private void applyDeviceId(Settings s) {
+        if (AirPlayConfig.validDeviceId(s.deviceIdOverride)) s.deviceId = s.deviceIdOverride;
+        else if (seedDeviceId != null) s.deviceId = seedDeviceId;
+    }
 
     private void ensureDeviceId(Map<String, Object> raw) {
         if (AirPlayConfig.validDeviceId(settings.deviceId)) return;
@@ -677,7 +695,19 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             host.executeShizuku(new String[] {"/system/bin/sh", "-c", script}, 10000, new PluginHost.CommandCallback() {
                 @Override public void onResult(boolean ok, Object data, String error) {
                     Object out = data instanceof Map ? ((Map<?, ?>) data).get("stdout") : null;
-                    if (!ok) log("Boot start setup failed: " + error);
+                    if (!ok) {
+                        // Usually another root command was still running: try again shortly.
+                        log("Boot start setup will retry: " + error);
+                        post(new Runnable() { @Override public void run() {
+                            keyInstalled = false;
+                            ScheduledExecutorService w = worker;
+                            if (w == null) return;
+                            try {
+                                w.schedule(new Runnable() { @Override public void run() { prepareBootStart(); } }, 10, TimeUnit.SECONDS);
+                            } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                            }
+                        } });
+                    }
                     else if (out != null && !String.valueOf(out).trim().isEmpty()) log("Boot start: " + String.valueOf(out).trim().replace("\n", ", "));
                 }
             });

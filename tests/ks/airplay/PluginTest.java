@@ -175,6 +175,30 @@ public final class PluginTest {
         plugin.stop();
         TestSupport.check(System.nanoTime() - t0 < 3_000_000_000L, "stop returns within the callback deadline");
         waitClosed();
+
+        // Fleet Management copies plugin settings, the old random device ID included. With a device ID from
+        // Android the plugin ignores the copied one, so every kiosk advertises its own.
+        String a1 = AirPlayConfig.deviceIdFrom("android-id-A"), b1 = AirPlayConfig.deviceIdFrom("android-id-B");
+        TestSupport.check(a1.equals(AirPlayConfig.deviceIdFrom("android-id-A")) && !a1.equals(b1), "stable and different per device");
+        TestSupport.check(AirPlayConfig.validDeviceId(a1) && (Integer.parseInt(a1.substring(0, 2), 16) & 0x03) == 0x02, "locally administered unicast");
+        FlowTest.FakePlatform seeded = new FlowTest.FakePlatform();
+        seeded.seed = "android-id-A";
+        FakeHost host2 = new FakeHost();
+        AirPlayPlugin plugin2 = new AirPlayPlugin(seeded);
+        Map<String, Object> copied = new LinkedHashMap<>(settings);
+        copied.put("name", "Study");
+        copied.put("deviceId", id); // the leader's, copied by the fleet
+        plugin2.start(host2, copied);
+        Map<String, Object> info2 = waitForInfo("Study");
+        TestSupport.check(a1.equals(info2.get("deviceID")), "advertises its own device ID, not the copied one: " + info2.get("deviceID"));
+        TestSupport.check(!host2.saved.containsKey("deviceId"), "saves no device ID setting");
+        copied.put("deviceIdOverride", "02:AA:BB:CC:DD:EE");
+        plugin2.configure(copied);
+        long until = System.currentTimeMillis() + 8000;
+        while (!"02:AA:BB:CC:DD:EE".equals(waitForInfo("Study").get("deviceID")) && System.currentTimeMillis() < until) Thread.sleep(100);
+        TestSupport.check("02:AA:BB:CC:DD:EE".equals(waitForInfo("Study").get("deviceID")), "override wins");
+        plugin2.stop();
+        waitClosed();
         System.out.println("PluginTest passed");
     }
 

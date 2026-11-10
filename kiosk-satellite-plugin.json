@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.10.45",
@@ -171,12 +171,12 @@
       "description": "TCP port for AirPlay connections, 1024 to 65535. The default keeps clear of Kiosk Satellite's own AirPlay receiver."
     },
     {
-      "key": "deviceId",
+      "key": "deviceIdOverride",
       "type": "string",
       "title": "AirPlay device ID",
       "default": "",
       "group": "Advanced",
-      "description": "Generated on first start. Clear it to make Apple devices see this kiosk as a new speaker."
+      "description": "Empty: made from this device, so every kiosk has its own, Fleet Management included. Only for troubleshooting: an ID set here replaces it, and Fleet Management copies it to every kiosk on the profile."
     },
     {
       "key": "features",

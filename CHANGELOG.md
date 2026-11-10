@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3
+
+- Fix: with Fleet Management, the iPhone listed only one of the kiosks and grouped audio could go to the wrong one. The plugin saved a random AirPlay device ID as a setting, and the fleet copied the leader's to every kiosk. The ID is now made from each device, so every kiosk has its own. Apple devices see each kiosk as a new speaker once.
+- **AirPlay device ID** under Advanced is now an optional override, empty by default.
+- The boot start's ADB key setup retries when another root command was still running, instead of waiting for the next boot.
+
 ## 0.6.2
 
 - Fix: Android asked "Allow USB debugging?" at every restart, with a new fingerprint each time, and multi-room stayed off until someone answered. The plugin lost its ADB key at each restart. It now keeps it in a secret **ADB key** setting under Advanced, so Android asks once. Clear the setting to make a new key.
