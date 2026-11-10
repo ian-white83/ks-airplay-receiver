@@ -36,6 +36,8 @@ public final class PtpClock {
         final long[] syncTime = new long[8];
         final long[] syncCorrection = new long[8];
         long offset, previousOffsetTime, mastershipStart, lastUpdate;
+        boolean stepPending;
+        long stepOffset;
         int samples;
 
         Clock(long id) {
@@ -195,9 +197,30 @@ public final class PtpClock {
         if (wake != null) sendWake(wake);
     }
 
-    /** nqptp's filter: accept increases quickly at first, then slowly; let decreases in only very slowly. */
+    static final long STEP_NANOS = 1_000_000_000L, STEP_AGREE_NANOS = 50_000_000L;
+
+    /**
+     * nqptp's filter: accept increases quickly at first, then slowly; let decreases in only very slowly. A jump
+     * of more than a second that two readings in a row agree on is a step, not network delay: an iPhone steps
+     * its clock by hours to follow a HomePod that becomes the group's grandmaster, and back when it leaves. It
+     * is taken at once, or the clock would stay on the old time for good.
+     */
     private void sample(Clock c, long offset, long received) {
-        if (c.previousOffsetTime == 0 || received - c.previousOffsetTime > DISCONTINUITY_NANOS) {
+        long jump = offset - c.offset;
+        boolean step = false;
+        if (c.previousOffsetTime != 0 && Math.abs(jump) > STEP_NANOS) {
+            if (c.stepPending && Math.abs(offset - c.stepOffset) < STEP_AGREE_NANOS) {
+                step = true;
+            } else {
+                // First reading of a possible step: wait for the next one to agree.
+                c.stepPending = true;
+                c.stepOffset = offset;
+                return;
+            }
+        }
+        c.stepPending = false;
+        if (step) log.log(String.format("PTP clock %016x stepped by %d ms", c.id, jump / 1_000_000L));
+        if (step || c.previousOffsetTime == 0 || received - c.previousOffsetTime > DISCONTINUITY_NANOS) {
             c.offset = offset;
             c.mastershipStart = received;
         } else {

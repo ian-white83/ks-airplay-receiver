@@ -64,5 +64,31 @@ public final class PtpClockTest {
         Long phoneOffset = group.offset(phone);
         check(phoneOffset != null && Math.abs(phoneOffset - phoneTruth) < 1_000_000, "the timeline's own clock wins over a follower: " + phoneOffset);
         check(Math.abs(group.offset(homePod) - homePodTruth) < 1_000_000, "the follower keeps its own offset");
+
+        // The iPhone steps its clock 8.5 hours back to follow the HomePod, and forward again when it leaves.
+        // One odd reading is ignored; two that agree are a step and taken at once.
+        long t1 = System.nanoTime() - 1_000_000_000L;
+        long stepped = phoneTruth - 30_608_000_000_000L;
+        group.handle(message(0x0, phone, 100, 0), 44, from, t1 + 300_000);
+        group.handle(message(0x8, phone, 100, t1 + stepped), 44, from, t1 + 350_000);
+        check(Math.abs(group.offset(phone) - phoneTruth) < 1_000_000, "a single jumped reading is held back");
+        for (int i = 1; i < 4; i++) {
+            long sent = t1 + i * 125_000_000L;
+            group.handle(message(0x0, phone, 100 + i, 0), 44, from, sent + 300_000);
+            group.handle(message(0x8, phone, 100 + i, sent + stepped), 44, from, sent + 350_000);
+        }
+        check(Math.abs(group.offset(phone) - stepped) < 1_000_000, "the step is followed: " + (group.offset(phone) - stepped));
+        long t2 = System.nanoTime() - 200_000_000L;
+        for (int i = 0; i < 2; i++) {
+            long sent = t2 + i * 50_000_000L;
+            group.handle(message(0x0, phone, 200 + i, 0), 44, from, sent + 300_000);
+            group.handle(message(0x8, phone, 200 + i, sent + phoneTruth), 44, from, sent + 350_000);
+        }
+        check(Math.abs(group.offset(phone) - phoneTruth) < 1_000_000, "and the step back");
+        // A late packet (100 ms delay) is not a step.
+        long t3 = System.nanoTime();
+        group.handle(message(0x0, phone, 300, 0), 44, from, t3 + 100_000_000L);
+        group.handle(message(0x8, phone, 300, t3 + phoneTruth), 44, from, t3 + 100_050_000L);
+        check(Math.abs(group.offset(phone) - phoneTruth) < 1_000_000, "a late packet barely moves the offset");
     }
 }
