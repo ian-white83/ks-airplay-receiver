@@ -107,5 +107,21 @@ public final class PtpClockTest {
         Long picked = group.offset(phone, anchorNetwork, anchorLocal);
         check(picked != null && Math.abs(picked - phoneTruth) < 1_000_000, "the anchor picks the iPhone's readings: " + picked);
         check(Math.abs(group.offset(phone, anchorLocal + impostor, anchorLocal) - impostor) < 1_000_000, "and the other sender's when its time fits");
+
+        // Spoofed packets with ever-new clock IDs: the table stays capped and keeps the clock playback follows.
+        for (int i = 0; i < 2000; i++) {
+            group.handle(message(0x0, 0x7700000000000000L + i, 1, 0), 44, InetAddress.getByAddress(new byte[] {10, 9, (byte) (i >> 8), (byte) i}), System.nanoTime());
+        }
+        check(group.clockCount() <= PtpClock.MAX_CLOCKS, "clock table capped: " + group.clockCount());
+        check(group.offset(phone, anchorNetwork, anchorLocal) != null, "the followed clock survives a flood");
+
+        // Peer addresses are parsed, never looked up.
+        check(PtpClock.literal("192.168.1.20") != null, "IPv4 literal");
+        check(PtpClock.literal("fe80::1c2b:3cff:fe4d:5e6f") != null, "IPv6 literal");
+        check(PtpClock.literal("::ffff:10.0.0.1") != null, "IPv4-mapped literal");
+        check(PtpClock.literal("2001:db8::1").getHostAddress().startsWith("2001:db8"), "IPv6 parsed: " + PtpClock.literal("2001:db8::1"));
+        for (String bad : new String[] {"example.com", "300.1.1.1", "1.2.3", "1.2.3.4.5", "fe80::1%en0", "1::2::3", "gggg::1", "", "localhost", "1.2.3.4x"}) {
+            check(PtpClock.literal(bad) == null, "rejects " + bad);
+        }
     }
 }

@@ -24,6 +24,11 @@ public final class PtpClock {
     static final int SYNC = 0x0, FOLLOW_UP = 0x8, ANNOUNCE = 0xB;
     private static final long DISCONTINUITY_NANOS = 5_000_000_000L;
     private static final long STALE_NANOS = 10_000_000_000L;
+    /**
+     * Most clocks kept at once. A group has a handful; anything on the network can send PTP packets with new
+     * clock IDs, so the table is capped and the longest-silent clock makes room.
+     */
+    static final int MAX_CLOCKS = 32;
 
     /** What we know about one clock, keyed by its clockIdentity. */
     static final class Clock {
@@ -35,7 +40,7 @@ public final class PtpClock {
         final long[] syncSeq = new long[8];
         final long[] syncTime = new long[8];
         final long[] syncCorrection = new long[8];
-        long offset, previousOffsetTime, mastershipStart, lastUpdate;
+        long offset, previousOffsetTime, mastershipStart, lastUpdate, lastHeard;
         boolean stepPending;
         long stepOffset;
         int samples;
@@ -82,6 +87,13 @@ public final class PtpClock {
             throw e;
         }
         running = true;
+        peerExecutor = java.util.concurrent.Executors.newSingleThreadExecutor(new java.util.concurrent.ThreadFactory() {
+            @Override public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "ptp-peers");
+                t.setDaemon(true);
+                return t;
+            }
+        });
         eventThread = loop(event, "ptp-event");
         generalThread = loop(general, "ptp-general");
     }
@@ -98,8 +110,13 @@ public final class PtpClock {
     public int generalPort() { return general == null ? 0 : general.getLocalPort(); }
     public boolean running() { return running; }
 
+    private volatile java.util.concurrent.ExecutorService peerExecutor;
+
     public void stop() {
         running = false;
+        java.util.concurrent.ExecutorService pe = peerExecutor;
+        peerExecutor = null;
+        if (pe != null) pe.shutdownNow();
         if (event != null) event.close();
         if (general != null) general.close();
         join(eventThread);
@@ -109,14 +126,14 @@ public final class PtpClock {
     private static void join(Thread t) {
         if (t == null) return;
         try {
-            t.join(1500);
+            t.join(400);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
 
     private Thread loop(final DatagramSocket socket, String name) {
-        Thread t = new Thread(new Runnable() {
+        return ks.airplay.Util.thread(name, new Runnable() {
             @Override public void run() {
                 byte[] buf = new byte[512];
                 DatagramPacket p = new DatagramPacket(buf, buf.length);
@@ -135,10 +152,7 @@ public final class PtpClock {
                     }
                 }
             }
-        }, name);
-        t.setDaemon(true);
-        t.start();
-        return t;
+        }, new ks.airplay.Util.Logger() { @Override public void log(String m) { log.log(m); } });
     }
 
     static long u64(byte[] b, int off) {
@@ -170,11 +184,16 @@ public final class PtpClock {
             String key = clockId + "@" + from.getHostAddress();
             Clock c = clocks.get(key);
             if (c == null) {
+                boolean evicted = clocks.size() >= MAX_CLOCKS && evictOne(now);
                 c = new Clock(clockId);
                 clocks.put(key, c);
-                log.log(String.format("PTP clock %016x found at %s", clockId, from.getHostAddress()));
+                if (!evicted || evictions % 100 == 1) {
+                    log.log(String.format("PTP clock %016x found at %s%s", clockId, from.getHostAddress(),
+                            evicted ? " (" + evictions + " silent clocks dropped so far)" : ""));
+                }
             }
             c.address = from;
+            c.lastHeard = now;
             if (type == SYNC) {
                 int slot = seq & 7;
                 c.syncSeq[slot] = seq;
@@ -281,6 +300,29 @@ public final class PtpClock {
         return chosen == null ? null : chosen.offset;
     }
 
+    private int evictions;
+
+    /** Clocks in the table. Visible for tests. */
+    synchronized int clockCount() { return clocks.size(); }
+
+    /** Drop the clock heard from longest ago, never the one playback follows. Caller holds the lock. */
+    private boolean evictOne(long now) {
+        String oldest = null;
+        long oldestHeard = Long.MAX_VALUE;
+        for (Map.Entry<String, Clock> e : clocks.entrySet()) {
+            Clock c = e.getValue();
+            if (c == lastChosen) continue;
+            if (c.lastHeard < oldestHeard) {
+                oldestHeard = c.lastHeard;
+                oldest = e.getKey();
+            }
+        }
+        if (oldest == null) return false;
+        clocks.remove(oldest);
+        evictions++;
+        return true;
+    }
+
     private static Clock better(Clock a, Clock b, long anchorNetwork, long anchorLocal) {
         if (a == null) return b;
         if (anchorNetwork == Long.MIN_VALUE) return b.samples > a.samples ? b : a;
@@ -297,34 +339,102 @@ public final class PtpClock {
      * and once more after two seconds for any peer still silent.
      */
     public void peers(final java.util.List<String> addresses) {
-        if (!running) return;
-        Thread t = new Thread(new Runnable() {
-            @Override public void run() {
-                java.util.List<InetAddress> targets = new java.util.ArrayList<>();
-                for (String a : addresses) {
-                    try {
-                        if (a.indexOf('%') >= 0) continue; // link-local with an Apple interface name
-                        InetAddress ip = InetAddress.getByName(a);
-                        if (ip.isAnyLocalAddress() || ip.isLoopbackAddress() || java.net.NetworkInterface.getByInetAddress(ip) != null) continue;
-                        targets.add(ip);
-                    } catch (IOException | RuntimeException ignored) {
-                    }
-                }
-                for (int round = 0; round < 2 && running; round++) {
-                    for (InetAddress ip : targets) {
-                        if (round == 1 && heardFrom(ip)) continue;
-                        sendWake(ip, 248, 248);
-                    }
-                    try {
-                        Thread.sleep(2000);
-                    } catch (InterruptedException e) {
-                        return;
-                    }
-                }
+        java.util.concurrent.ExecutorService pe = peerExecutor;
+        if (!running || pe == null) return;
+        final java.util.List<InetAddress> targets = new java.util.ArrayList<>();
+        for (String a : addresses) {
+            InetAddress ip = literal(a);
+            if (ip == null) continue;
+            try {
+                if (ip.isAnyLocalAddress() || ip.isLoopbackAddress() || ip.isMulticastAddress()
+                        || java.net.NetworkInterface.getByInetAddress(ip) != null) continue;
+            } catch (IOException | RuntimeException e) {
+                continue;
             }
-        }, "ptp-peers");
-        t.setDaemon(true);
-        t.start();
+            if (!targets.contains(ip)) targets.add(ip);
+            if (targets.size() >= 16) break;
+        }
+        if (targets.isEmpty()) return;
+        try {
+            pe.execute(ks.airplay.Util.guard("ptp-peers", new Runnable() {
+                @Override public void run() {
+                    for (int round = 0; round < 2 && running; round++) {
+                        for (InetAddress ip : targets) {
+                            if (round == 1 && heardFrom(ip)) continue;
+                            sendWake(ip, 248, 248);
+                        }
+                        try {
+                            Thread.sleep(2000);
+                        } catch (InterruptedException e) {
+                            return;
+                        }
+                    }
+                }
+            }, new ks.airplay.Util.Logger() { @Override public void log(String m) { log.log(m); } }));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // stopping
+        }
+    }
+
+    /**
+     * An IP address written as digits, or null. Names are never looked up: the list comes from the sender, and a
+     * lookup would send DNS queries for whatever it says. Link-local addresses with an interface name are skipped.
+     */
+    static InetAddress literal(String text) {
+        if (text == null || text.isEmpty() || text.length() > 45 || text.indexOf('%') >= 0) return null;
+        byte[] bytes = text.indexOf(':') >= 0 ? v6(text) : v4(text);
+        if (bytes == null) return null;
+        try {
+            return InetAddress.getByAddress(bytes); // built from bytes: never a lookup
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static byte[] v4(String text) {
+        String[] parts = text.split("\\.", -1);
+        if (parts.length != 4) return null;
+        byte[] out = new byte[4];
+        for (int i = 0; i < 4; i++) {
+            if (!parts[i].matches("\\d{1,3}")) return null;
+            int v = Integer.parseInt(parts[i]);
+            if (v > 255) return null;
+            out[i] = (byte) v;
+        }
+        return out;
+    }
+
+    private static byte[] v6(String text) {
+        byte[] tail = null;
+        int dot = text.indexOf('.');
+        if (dot >= 0) { // ends in an IPv4 address, as in ::ffff:192.168.1.5
+            int colon = text.lastIndexOf(':');
+            if (colon > dot) return null;
+            tail = v4(text.substring(colon + 1));
+            if (tail == null) return null;
+            text = text.substring(0, colon + 1) + "0:0";
+        }
+        int gap = text.indexOf("::");
+        if (gap >= 0 && text.indexOf("::", gap + 1) >= 0) return null;
+        String[] head = gap < 0 ? text.split(":", -1) : text.substring(0, gap).isEmpty() ? new String[0] : text.substring(0, gap).split(":", -1);
+        String[] rest = gap < 0 ? new String[0] : text.substring(gap + 2).isEmpty() ? new String[0] : text.substring(gap + 2).split(":", -1);
+        int groups = head.length + rest.length;
+        if (gap < 0 ? groups != 8 : groups > 7) return null;
+        int[] words = new int[8];
+        for (int i = 0; i < head.length; i++) if ((words[i] = word(head[i])) < 0) return null;
+        for (int i = 0; i < rest.length; i++) if ((words[8 - rest.length + i] = word(rest[i])) < 0) return null;
+        byte[] out = new byte[16];
+        for (int i = 0; i < 8; i++) {
+            out[2 * i] = (byte) (words[i] >> 8);
+            out[2 * i + 1] = (byte) words[i];
+        }
+        if (tail != null) System.arraycopy(tail, 0, out, 12, 4);
+        return out;
+    }
+
+    private static int word(String s) {
+        if (!s.matches("[0-9A-Fa-f]{1,4}")) return -1;
+        return Integer.parseInt(s, 16);
     }
 
     private synchronized boolean heardFrom(InetAddress ip) {

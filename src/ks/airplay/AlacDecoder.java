@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Apple's ALAC reference decoder: Copyright (c) 2011 Apple Inc. All rights reserved.
+// Licensed under the Apache License, Version 2.0. See NOTICE.
 package ks.airplay;
 
 /**

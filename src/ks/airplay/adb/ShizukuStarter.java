@@ -14,14 +14,16 @@ public final class ShizukuStarter {
     public static final int PORT = 5555;
     static final String PACKAGE = "moe.shizuku.privileged.api";
 
-    /** Finds Shizuku's starter: libshizuku.so in recent versions, start.sh in older ones. */
-    static final String AUTO_START =
+    /**
+     * Runs Shizuku's starter, libshizuku.so, from Shizuku's own installed package. Only that: the package directory
+     * belongs to the system and no app can change it. The start.sh copy Shizuku leaves on shared storage is never
+     * run, because on Android 7 to 10 any app with storage access could rewrite it.
+     */
+    static final String START =
             "p=$(pm path " + PACKAGE + " 2>/dev/null | head -n 1); p=${p#package:}\n"
-            + "[ -n \"$p\" ] || { echo 'Shizuku is not installed'; exit 1; }\n"
+            + "case \"$p\" in /data/app/*|/system/*|/product/*) ;; *) echo 'Shizuku is not installed'; exit 1;; esac\n"
             + "for f in \"${p%/*}\"/lib/*/libshizuku.so; do [ -f \"$f\" ] && exec \"$f\"; done\n"
-            + "s=/storage/emulated/0/Android/data/" + PACKAGE + "/start.sh\n"
-            + "[ -f \"$s\" ] && exec sh \"$s\"\n"
-            + "echo \"Could not find Shizuku's starter. Copy the command from Shizuku > Start via connected computer into the plugin's Start command setting.\"; exit 1";
+            + "echo \"Could not find Shizuku's starter (libshizuku.so). Update Shizuku to version 13 or later.\"; exit 1";
 
     public interface Progress {
         /** Report a step. Returns false to stop. */
@@ -46,21 +48,13 @@ public final class ShizukuStarter {
         this.port = port;
     }
 
-    /** Keeps adbd on port 5555 across reboots, then runs the starter. Shell syntax, run as root. */
-    static String script(String command) {
-        String c = command == null ? "" : command.trim();
-        if (c.toLowerCase(Locale.ROOT).startsWith("adb shell ")) c = c.substring("adb shell ".length()).trim();
-        return "[ \"$(getprop persist.adb.tcp.port)\" = " + PORT + " ] || setprop persist.adb.tcp.port " + PORT + "\n"
-                + (c.isEmpty() ? AUTO_START : c);
-    }
-
     /**
      * Connect as root and, unless skipStart, run the starter. Returns what the starter printed.
      *
      * @param connectMs how long to keep trying while adbd is not listening yet, as early in boot
      * @param approvalMs how long to wait for someone to approve this plugin's key on the screen
      */
-    public String run(String command, boolean skipStart, int connectMs, int approvalMs, final Progress progress) throws IOException {
+    public String run(boolean skipStart, int connectMs, int approvalMs, final Progress progress) throws IOException {
         step(progress, "Connecting to ADB on port " + port);
         AdbClient c = connectRetry(connectMs, approvalMs, progress);
         try {
@@ -78,12 +72,9 @@ public final class ShizukuStarter {
                 uid = c.shell("id -u", 10000).trim();
                 if (!"0".equals(uid)) throw new IOException("ADB is still not root (uid " + uid + "). Turn on Rooted debugging in Developer options.");
             }
-            if (skipStart) {
-                c.shell("[ \"$(getprop persist.adb.tcp.port)\" = " + PORT + " ] || setprop persist.adb.tcp.port " + PORT, 10000);
-                return "";
-            }
+            if (skipStart) return "";
             step(progress, "Starting Shizuku");
-            return c.shell(script(command), 30000).trim();
+            return c.shell(START, 30000).trim();
         } finally {
             c.close();
         }
@@ -104,7 +95,7 @@ public final class ShizukuStarter {
             } catch (IOException e) {
                 if (System.currentTimeMillis() >= deadline) {
                     if (e instanceof ConnectException) {
-                        throw new IOException("Nothing answers on " + host + ":" + port + ". ADB over network is off: run adb tcpip " + port + " once from a computer, or turn on ADB over network in Developer options.");
+                        throw new IOException("Nothing answers on " + host + ":" + port + ". ADB isn't kept on port " + port + " after restarts. See step 8 of the plugin's setup guide.");
                     }
                     throw e;
                 }

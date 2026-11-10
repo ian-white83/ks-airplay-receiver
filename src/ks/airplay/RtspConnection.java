@@ -101,7 +101,7 @@ final class RtspConnection implements Runnable {
                 remoteHeaders(request);
                 try {
                     handle(request, response);
-                } catch (Exception e) {
+                } catch (Exception | StackOverflowError | OutOfMemoryError e) {
                     platform.log(request.method + " " + request.uri + " failed: " + e);
                     response.status(500, "Internal Server Error");
                 }
@@ -119,6 +119,8 @@ final class RtspConnection implements Runnable {
             // closed by us or the sender
         } catch (IOException e) {
             if (!closed) platform.log("AirPlay connection error: " + e.getMessage());
+        } catch (Throwable e) {
+            platform.log("AirPlay connection failed: " + e);
         } finally {
             close();
             server.connectionEnded(this);
@@ -203,10 +205,13 @@ final class RtspConnection implements Runnable {
         }
     }
 
+    static final int MAX_INFO_BODY = 4096;
+
     @SuppressWarnings("unchecked")
     private void info(RtspMessage req, RtspMessage.Response res) {
         String qualifier = null;
-        Object q = plist(req).get("qualifier");
+        // Only the qualifier matters here, which senders send in a few dozen bytes. Skip anything larger.
+        Object q = req.body.length > MAX_INFO_BODY ? null : plist(req).get("qualifier");
         if (q instanceof List && !((List<Object>) q).isEmpty()) qualifier = String.valueOf(((List<Object>) q).get(0));
         String sender = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
         res.body("application/x-apple-binary-plist", BPlist.write(config.info(qualifier, sender, server.volumeDb(), groupId, groupContainsLeader)));
@@ -252,7 +257,13 @@ final class RtspConnection implements Runnable {
             if (type == 103) {
                 byte[] shk = BPlist.getData(stream, "shk");
                 int ct = (int) BPlist.getLong(stream, "ct", 4);
-                int spf = (int) BPlist.getLong(stream, "spf", ct == 2 ? 352 : 1024);
+                long spfValue = BPlist.getLong(stream, "spf", ct == 2 ? 352 : 1024);
+                if (spfValue < 1 || spfValue > BufferedSession.MAX_SPF) {
+                    platform.log("Rejected a buffered stream with " + spfValue + " samples per frame");
+                    res.status(400, "Bad Request");
+                    return;
+                }
+                int spf = (int) spfValue;
                 if (shk == null || shk.length != 32) {
                     platform.log("Buffered stream without a 32-byte session key");
                     res.status(400, "Bad Request");
@@ -388,45 +399,59 @@ final class RtspConnection implements Runnable {
 
     // ---------------------------------------------------------------- event channel and addresses
 
-    /** The sender opens an (encrypted) event connection. Nothing needs to be sent on it, so it is held open. */
+    /** Event connections a session may hold open. Senders open one. */
+    static final int MAX_EVENT_CONNECTIONS = 4;
+
+    /**
+     * The sender opens an (encrypted) event connection. Nothing needs to be sent on it, so it is held open and
+     * drained. At most MAX_EVENT_CONNECTIONS at once: further ones close the oldest.
+     */
     private synchronized int openEvents() throws IOException {
         if (eventServer != null) return eventServer.getLocalPort();
         final ServerSocket s = new ServerSocket(0);
         eventServer = s;
-        eventThread = new Thread(new Runnable() {
+        final Util.Logger log = new Util.Logger() { @Override public void log(String m) { platform.log(m); } };
+        eventThread = Util.thread("airplay-event-accept", new Runnable() {
             @Override public void run() {
-                List<Socket> held = new ArrayList<>();
+                final java.util.ArrayDeque<Socket> held = new java.util.ArrayDeque<>();
                 try {
                     while (!closed) {
                         final Socket c = s.accept();
-                        held.add(c);
-                        Thread drain = new Thread(new Runnable() {
+                        synchronized (held) {
+                            while (held.size() >= MAX_EVENT_CONNECTIONS) closeQuietly(held.removeFirst());
+                            held.addLast(c);
+                        }
+                        Util.thread("airplay-events", new Runnable() {
                             @Override public void run() {
                                 byte[] b = new byte[1024];
                                 try {
                                     InputStream i = c.getInputStream();
                                     while (i.read(b) >= 0) { /* discard */ }
                                 } catch (IOException ignored) {
+                                } finally {
+                                    synchronized (held) { held.remove(c); }
+                                    closeQuietly(c);
                                 }
                             }
-                        }, "airplay-events");
-                        drain.setDaemon(true);
-                        drain.start();
+                        }, log);
                     }
                 } catch (IOException ignored) {
                 } finally {
-                    for (Socket c : held) {
-                        try {
-                            c.close();
-                        } catch (IOException ignored) {
-                        }
+                    synchronized (held) {
+                        for (Socket c : held) closeQuietly(c);
+                        held.clear();
                     }
                 }
             }
-        }, "airplay-event-accept");
-        eventThread.setDaemon(true);
-        eventThread.start();
+        }, log);
         return s.getLocalPort();
+    }
+
+    private static void closeQuietly(Socket c) {
+        try {
+            c.close();
+        } catch (IOException ignored) {
+        }
     }
 
     private synchronized void closeEvents() {

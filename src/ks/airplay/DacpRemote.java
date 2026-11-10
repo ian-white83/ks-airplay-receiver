@@ -46,6 +46,7 @@ public final class DacpRemote {
             if (status == null) throw new IOException("No answer from the sender's remote");
             String[] parts = status.split(" ");
             if (parts.length < 2) throw new IOException("Bad answer: " + status);
+            if (!parts[1].matches("\\d{3}")) throw new IOException("Bad answer: " + status);
             return Integer.parseInt(parts[1]);
         }
     }

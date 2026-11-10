@@ -65,13 +65,17 @@ with tempfile.TemporaryDirectory(prefix='kiosk-plugin-') as temp:
         for file in sorted(dex.glob('*.dex')):
             add(archive, file.name, file.read_bytes())
     package = out / f"{manifest['id']}-{manifest['version']}.zip"
-    expanded = len(manifest_bytes) + jar.stat().st_size + (plugin / 'LICENSE').stat().st_size + sum(file.stat().st_size for _, file in assets)
+    # Kiosk Satellite allows only LICENSE at the top of the package, so third-party notices follow the license text.
+    license_bytes = (plugin / 'LICENSE').read_bytes()
+    if (plugin / 'NOTICE').is_file():
+        license_bytes += b'\n\n' + b'=' * 78 + b'\nNOTICE\n' + b'=' * 78 + b'\n\n' + (plugin / 'NOTICE').read_bytes()
+    expanded = len(manifest_bytes) + jar.stat().st_size + len(license_bytes) + sum(file.stat().st_size for _, file in assets)
     if expanded > MAX_PACKAGE_BYTES:
         raise SystemExit('Expanded plugin exceeds 4 MB')
     with zipfile.ZipFile(package, 'w', zipfile.ZIP_DEFLATED) as archive:
         add(archive, 'kiosk-satellite-plugin.json', manifest_bytes)
         add(archive, 'plugin.jar', jar.read_bytes())
-        add(archive, 'LICENSE', (plugin / 'LICENSE').read_bytes())
+        add(archive, 'LICENSE', license_bytes)
         for name, file in assets:
             add(archive, name, file.read_bytes())
     if package.stat().st_size > MAX_PACKAGE_BYTES:

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.0
+
+Everything in 0.7.0, plus fixes from the Community Plugins security review. Needs Kiosk Satellite 2026.11.14 or later.
+
+**If you're updating from 0.6 or earlier:** pick the plugin under **Settings > Media Player > Player > AirPlay 2**, and set up Now Playing, lyrics and ducking in Kiosk Satellite's Media Player settings. See 0.7.0 below.
+
+Security and stability:
+
+- Nothing on the network can crash Kiosk Satellite through the plugin any more. Every plugin thread catches whatever it throws and logs it.
+- Property lists from senders are parsed with limits, so a tiny crafted one can't expand into billions of objects. `/info` ignores large bodies.
+- A buffered stream asking for more than 8192 samples per frame is refused.
+- At most four event connections per session, and at most 32 PTP clocks: spoofed packets can't make either grow without end.
+- A bad answer from a sender's remote control is an error, not a crash.
+- Group peer addresses are parsed, never looked up by name, and the hellos to them share one thread.
+- Stopping the plugin returns within Kiosk Satellite's three-second limit, removes the PTP redirect first and no longer leaks a thread.
+
+Boot start (optional, off by default):
+
+- The plugin no longer changes system settings. It doesn't add its key to Android's trusted ADB keys (you allow it once on the screen) or set ADB's port (a one-time command in the setup guide). Existing setups keep working.
+- The ADB key moves out of settings into private storage on each kiosk, so configuration exports and Fleet Management never copy it. Existing keys move over with no new prompt.
+- Turning the boot start off removes the plugin's key from Android's trusted ADB keys and deletes it. The README explains how to undo it by hand.
+- Removed **Shizuku start command**: the plugin only runs `libshizuku.so` from Shizuku's installed package, never a command from settings or `start.sh` from shared storage.
+
+Other:
+
+- Added NOTICE: the ALAC decoder is ported from Apple's Apache-2.0 reference decoder.
+
 ## 0.7.0
 
 The plugin is now a Kiosk Satellite player. Needs Kiosk Satellite 2026.11.14 or later.

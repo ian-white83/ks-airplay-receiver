@@ -70,8 +70,10 @@ public final class PluginTest {
             if (shizuku == null) throw new UnsupportedOperationException("Shizuku is unavailable");
             return shizuku;
         }
+        final List<String> scripts = new java.util.concurrent.CopyOnWriteArrayList<>();
         @Override public void executeShizuku(String[] command, int timeoutMs, CommandCallback callback) {
             calls.add("shizuku-exec");
+            scripts.add(command[command.length - 1]);
             callback.onResult(false, null, "not in tests");
         }
     }
@@ -104,8 +106,13 @@ public final class PluginTest {
 
     public static void main(String[] args) throws Exception {
         FakeHost host = new FakeHost();
-        AirPlayPlugin plugin = new AirPlayPlugin(new FlowTest.FakePlatform());
+        FlowTest.FakePlatform platform = new FlowTest.FakePlatform();
+        platform.dir = java.nio.file.Files.createTempDirectory("airplay-data").toFile();
+        AirPlayPlugin plugin = new AirPlayPlugin(platform);
         Map<String, Object> settings = new LinkedHashMap<>();
+        // Upgrading from 0.6.2 to 0.7.0, which kept the ADB key in a secret setting.
+        ks.airplay.adb.AdbKey oldKey = ks.airplay.adb.AdbKey.generate(AirPlayPlugin.KEY_NAME);
+        settings.put("adbKey", oldKey.toSecret());
         settings.put("name", "");
         settings.put("port", String.valueOf(PORT));
         settings.put("deviceId", "");
@@ -115,6 +122,12 @@ public final class PluginTest {
         String id = (String) host.saved.get("deviceId");
         TestSupport.check(AirPlayConfig.validDeviceId(id), "device ID generated and saved: " + id);
         TestSupport.check(host.calls.contains("player:" + AirPlayPlugin.PLAYER_KEY) && host.player != null, "publishes its player");
+        // The old key moves to private storage, unchanged so Android needs no new approval, and the setting clears.
+        waitFor(() -> "".equals(host.saved.get("adbKey")), "old ADB key setting cleared");
+        java.io.File keyFile = new java.io.File(platform.dir, AirPlayPlugin.KEY_FILE);
+        TestSupport.check(ks.airplay.adb.AdbKey.fromSecret(new String(java.nio.file.Files.readAllBytes(keyFile.toPath()), "UTF-8"), "x").publicKey().split(" ")[0]
+                .equals(oldKey.publicKey().split(" ")[0]), "same key in private storage");
+        settings.put("adbKey", "");
         settings.put("deviceId", id);
         plugin.configure(settings);
         Thread.sleep(300);
@@ -180,9 +193,9 @@ public final class PluginTest {
         host.shizuku = root;
         plugin.onEvent("shizuku.state", root);
         waitForCall(host, "text:shizuku=Running as root");
-        // Boot start on and Shizuku root: the plugin makes its ADB key, keeps it in its secret setting and trusts it.
-        waitFor(() -> String.valueOf(host.saved.get("adbKey")).startsWith("v1:"), "ADB key saved in settings");
-        waitForCall(host, "shizuku-exec");
+        // Turning boot start on changes nothing on the device: no trusted keys, no ADB port.
+        Thread.sleep(300);
+        TestSupport.check(host.scripts.stream().noneMatch(s -> s.contains("adb_keys") || s.contains("setprop")), "boot start on writes nothing as root");
         waitFor(() -> Boolean.TRUE.equals(host.saved.get("shizukuRunning")), "Started button shown");
         settings.put("shizukuRunning", false); // someone flips the flag by hand
         host.saved.put("shizukuRunning", false);
@@ -192,6 +205,15 @@ public final class PluginTest {
         host.saved.put("shizukuRunning", true);
         plugin.onEvent("shizuku.state", new HashMap<String, Object>());
         waitFor(() -> Boolean.FALSE.equals(host.saved.get("shizukuRunning")), "Start button back");
+
+        // Turning boot start off with Shizuku as root: the plugin's key leaves Android's trusted keys and is deleted.
+        host.shizuku = root;
+        settings.put("shizukuAtBoot", false);
+        plugin.configure(settings);
+        waitFor(() -> host.scripts.stream().anyMatch(s -> s.contains("adb_keys") && s.contains("grep -v ' " + AirPlayPlugin.KEY_NAME + "$'")), "key removed from trusted keys");
+        waitFor(() -> !keyFile.exists(), "key file deleted");
+        TestSupport.check(host.scripts.stream().noneMatch(s -> s.contains("setprop")), "never sets ADB properties");
+        host.shizuku = null;
 
         t0 = System.nanoTime();
         plugin.stop();

@@ -2,13 +2,13 @@
 
 Turns a [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) kiosk into an AirPlay 2 speaker that you can group with HomePods, Apple TVs and other AirPlay 2 speakers. Pick several speakers in the AirPlay menu on an iPhone, iPad or Mac and they play in sync.
 
-> **⚠️ Updating to 0.7.0? This is a big change. Do this after you update:**
+> **⚠️ Updating from 0.6 or earlier? Version 1.0 is a big change. Do this after you update:**
 >
-> 1. **Update Kiosk Satellite to 2026.11.14 or later first.** 0.7.0 doesn't run on older versions.
+> 1. **Update Kiosk Satellite to 2026.11.14 or later first.** 1.0 doesn't run on older versions.
 > 2. **Pick the plugin as your player:** open **Settings > Media Player > Player** and choose **AirPlay 2**. Until you do, the kiosk won't show up as an AirPlay speaker.
 > 3. **Set up Now Playing, lyrics and ducking in Kiosk Satellite.** The plugin no longer draws its own floating player, full-screen player, screensaver view or lyrics. Kiosk Satellite's own Now Playing does all of that now, from its **Settings > Media Player** settings. The plugin's **Lower AirPlay while the assistant talks**, **Wake the screen** and **Now Playing** settings are gone, along with the **AirPlay receiver** switch and the track sensors in Home Assistant (use Kiosk Satellite's media player entity instead).
 >
-> Your Shizuku setup, boot start, speaker name and audio offset carry over unchanged. See the [changelog](CHANGELOG.md) for everything that changed.
+> Your Shizuku setup, boot start, speaker name and audio offset carry over, and the boot start keeps working without a new prompt. If you set a **Shizuku start command**, it's gone: the plugin now only runs Shizuku's own starter. See the [changelog](CHANGELOG.md) for everything that changed.
 
 It's an AirPlay 2 player for Kiosk Satellite's Media Player. Pick it under **Settings > Media Player > Player**, in place of Kiosk Satellite's built-in AirPlay receiver: that one plays to a single speaker, while this one adds AirPlay 2 buffered audio locked to the sender's clock, so the kiosk can be part of a group.
 
@@ -27,7 +27,7 @@ For multi-room you need:
 - **A rooted kiosk whose Android has Rooted debugging.** LineageOS builds have it, including Kiosk Satellite's Echo builds. Without root the plugin still plays AirPlay 2 audio, but not in sync with other speakers.
 - **Kiosk Satellite 2026.11.14 or later** with Plugin Manager turned on.
 - **[Shizuku](https://shizuku.rikka.app/) 13 or later** on the kiosk. Setup below shows how to install it without an app store.
-- **A computer with ADB, once**, to install Shizuku and start it the first time. Get [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) for Windows, macOS or Linux. After setup the plugin starts Shizuku by itself, so you don't need the computer again.
+- **A computer with ADB, once**, to install Shizuku and start it the first time. Get [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) for Windows, macOS or Linux. After setup the plugin can start Shizuku by itself at boot if you turn that on, so you don't need the computer again.
 - **The kiosk and your Apple devices on the same network**, with mDNS and multicast allowed between them (no Wi-Fi client isolation or separate VLAN).
 
 ## Installation
@@ -117,21 +117,35 @@ Then pick it as the player: open **Settings > Media Player > Player** and choose
 
 On the plugin's page in **Plugin Manager** (or in **Settings > Device > Shizuku**), tap **Shizuku access** and approve Shizuku's prompt on the kiosk. The plugin's **Shizuku** status should say **Running as root**, and its **AirPlay multi-room** reading **Multi-room ready** within a few seconds (once **AirPlay 2** is the picked player).
 
-### 8. Make it survive restarts
+### 8. Make it survive restarts (optional)
 
-Shizuku stops whenever the kiosk restarts. The plugin can start it again by itself, with no computer and no extra apps:
+Shizuku stops whenever the kiosk restarts, and multi-room stays off until it runs as root again. You can start it again from the computer after each restart with the commands in step 5. Or the plugin can start it by itself at boot, with no computer and no extra apps.
 
-1. In the plugin's **Shizuku** section, turn on **Start Shizuku as root at boot**. Do this while Shizuku still runs as root from step 5: the plugin then adds its own key to Android's trusted ADB keys and keeps ADB on port 5555 after restarts, so there is no prompt.
-2. The button in the **Shizuku** section should say **Started**, because Shizuku already runs as root. Tap it: it checks the path and should report that the boot start can reach ADB as root. The **Shizuku** status under it shows the current state.
-3. Restart the kiosk. About a minute after Kiosk Satellite comes up, **Shizuku** should say **Running as root** again and **AirPlay multi-room** **Multi-room ready**.
+**What this opens up.** The boot start works the way your computer does in step 5: the plugin signs in to the kiosk's own ADB with a key you allow, switches ADB to root and runs Shizuku's starter. For that, ADB has to stay on port 5555 after restarts. ADB is then reachable from your network on that port, at every boot. Only keys someone allowed on the kiosk screen get in, but any of those keys gets root. Turn it on only on a network you trust.
 
-If Android shows **Allow USB debugging?** for the plugin's key (`ks-airplay@kiosk`), tick **Always allow** and tap **Allow**. It should not ask again after a restart; if it does, see Troubleshooting. At boot the plugin keeps asking for up to ten minutes, so there's time to get to the screen.
+To turn it on:
 
-You can now unplug or close the computer. Every time the kiosk boots, the plugin connects to its own ADB on 127.0.0.1:5555, switches it to root and runs Shizuku's starter, the same as the commands in step 5.
+1. Keep ADB on port 5555 after restarts. With the computer still connected as root from step 5, run:
 
-The plugin finds Shizuku's starter by itself. If a Shizuku version puts it somewhere else, paste the command from **Shizuku > Start via connected computer > View command** into **Shizuku start command** under Advanced.
+   ```sh
+   adb shell setprop persist.adb.tcp.port 5555
+   ```
 
-The plugin's ADB key gives root through ADB, like the key of a computer you allowed. It lives in the plugin's **ADB key** setting under Advanced, a secret setting that Kiosk Satellite masks everywhere, so it stays the same from boot to boot and Android only asks once. Kiosk Satellite's configuration exports and Fleet Management's plugin secrets include it, like any other secret setting, so keep those private. To make a new key, clear **ADB key**. To revoke the key, use **Revoke USB debugging authorizations** in Developer options. That also removes your computer's key.
+2. In the plugin's **Shizuku** section, turn on **Start Shizuku as root at boot**.
+3. Tap the button in the **Shizuku** section (**Started** while Shizuku already runs as root). Android asks **Allow USB debugging?** for the plugin's key, `ks-airplay@kiosk`. Tick **Always allow** and tap **Allow**. The button then reports that the boot start can reach ADB as root.
+4. Restart the kiosk. About a minute after Kiosk Satellite comes up, **Shizuku** should say **Running as root** again and **AirPlay multi-room** **Multi-room ready**.
+
+You can now unplug or close the computer. At every boot the plugin connects to its own ADB on 127.0.0.1:5555, switches it to root and runs `libshizuku.so` from Shizuku's installed package, nothing else. The plugin changes no system setting itself: you set the port in step 1, and Android records the key when you allow it.
+
+If nobody answers the prompt at boot, the plugin asks again every 30 seconds for up to ten minutes.
+
+The plugin's key is made on the kiosk and kept in the plugin's private storage on that kiosk only. It isn't a setting, so configuration exports and Fleet Management never copy it, and each kiosk has its own. Versions 0.6.2 to 0.7.0 kept it in a secret setting; 1.0 moves it out and clears the setting, with no new prompt. If you used Fleet Management with **Plugin secrets** on those versions, your kiosks may share one key: turn **Start Shizuku as root at boot** off and on again on each kiosk, then tap the button, to give each its own.
+
+#### Undo it
+
+- **Turn off Start Shizuku as root at boot** while Shizuku runs as root. The plugin removes its key from Android's trusted ADB keys and deletes it.
+- **Stop ADB listening on the network** from the computer: `adb shell setprop persist.adb.tcp.port ""`, then restart the kiosk. Or turn off **Android debugging** in Developer options, which turns off all ADB.
+- **If you uninstalled the plugin first**, or Shizuku wasn't running as root when you turned it off, the key stays trusted. Use **Revoke USB debugging authorizations** in Developer options. That also removes your computer's key.
 
 ### 9. Play to a group
 
@@ -141,7 +155,7 @@ On an iPhone, open Control Center, long-press the audio card, tap the AirPlay ic
 
 An AirPlay 2 group shares one clock. The sender runs a PTP clock (IEEE 1588) and sends its timing on UDP ports 319 and 320. Every speaker plays each moment of audio when that clock says to.
 
-Android apps can't open ports below 1024. So at start, the plugin uses Shizuku as root once to add `iptables` rules. The rules redirect incoming UDP 319 and 320 to 10319 and 10320, which the plugin can open. The rules match only those two ports, and the plugin removes them when it stops.
+Android apps can't open ports below 1024. So at start, the plugin uses Shizuku as root once to add `iptables` rules. The rules redirect incoming UDP 319 and 320 to 10319 and 10320, which the plugin can open. The rules match only those two ports. The plugin removes them when it stops being the player, and they never survive a restart. (When the plugin is disabled or updated, Kiosk Satellite currently closes Shizuku first, so the rules stay until the next restart; they only point at ports nothing else uses.)
 
 Apart from the optional boot start above, nothing else runs as root. Kiosk Satellite allows plugins only short root commands, not root services. If a device already lets apps bind ports 319 and 320, the plugin uses them directly and skips iptables.
 
@@ -165,7 +179,7 @@ Sync accuracy is a few milliseconds. PTP packets get their timestamps in Java ra
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Start Shizuku as root at boot | Off | Starts Shizuku as root through the device's own ADB whenever the kiosk boots. See [step 8](#8-make-it-survive-restarts) |
+| Start Shizuku as root at boot | Off | Starts Shizuku as root through the device's own ADB whenever the kiosk boots. Optional. See [step 8](#8-make-it-survive-restarts-optional) |
 | Start Shizuku now | button | **Start** while Shizuku isn't running as root: runs the same start by hand. It turns into **Started** once Shizuku runs as root; tapping that checks that the boot start can still reach ADB |
 
 The **Shizuku** status under the button shows whether Shizuku is running as root, as shell or not at all, and why a start failed.
@@ -190,10 +204,9 @@ Now Playing, lyrics, the floating player, the screensaver view, assistant duckin
 | --- | --- | --- |
 | Port | 7100 | TCP port for AirPlay connections. The default keeps clear of Kiosk Satellite's own receiver |
 | AirPlay device ID | empty | Empty: made from this device, so every kiosk has its own. Only for troubleshooting; Fleet Management copies a value set here to every kiosk on the profile |
-| ADB key | empty, secret | The plugin's ADB key for the boot start, made on first use. See [step 8](#8-make-it-survive-restarts) |
+| ADB key from an earlier version | empty, secret | Only 0.6.2 to 0.7.0 kept the boot start's key here. The plugin moves it to private storage and clears this by itself |
 | Feature flags | empty | For troubleshooting only. Empty advertises `0x401FCA00,0x1C340`, the set shairport-sync uses |
 | Shizuku is running as root | set by the plugin | Switches the button between **Start** and **Started**. The plugin keeps it in step with Shizuku, so changing it has no effect |
-| Shizuku start command | empty | Empty finds Shizuku's starter automatically. Otherwise the command from **Shizuku > Start via connected computer > View command** |
 
 ## Home Assistant
 
@@ -211,7 +224,7 @@ The Remote Admin Overview also gets an **AirPlay** status tile.
 Fleet Management copies a plugin's settings from the leader to every kiosk on the profile, apart from secret settings. The plugin keeps what must differ per kiosk out of its settings:
 
 - **The AirPlay device ID** is made from each device, so every kiosk shows up as its own speaker. Versions before 0.6.3 saved a random ID as a setting, which the fleet copied, so the iPhone saw several kiosks as one and listed only one of them.
-- **The ADB key** is a secret setting, so each kiosk keeps its own unless the profile includes **Plugin secrets**. Either way works.
+- **The ADB key** for the boot start is kept in each kiosk's private storage, not in settings, so it's never copied.
 - **Speaker name**: leave it empty, so each kiosk uses its own device name. A name set on the leader is copied to every kiosk.
 
 **Audio offset** is copied too. If one kiosk needs its own, set it on the leader to suit most of them, or take the plugin out of that kiosk's profile.
@@ -240,7 +253,7 @@ On the local network it uses:
 - One TCP port per stream for audio and one for events, picked at random.
 - UDP 319 and 320 (redirected to 10319 and 10320) to receive PTP timing from senders. It also sends a short PTP Announce to each member of the group the sender lists, so the device leading the group's clock starts sending it timing, as shairport-sync's nqptp does.
 - Remote control (DACP), only for a sender that offers it: when you tap play/pause or skip in Now Playing, it finds the sender's `_dacp._tcp` service over Bonjour and sends it the command over HTTP, with the remote ID the sender gave it.
-- Only with **Start Shizuku as root at boot** on: ADB on the device itself, 127.0.0.1:5555, signed in with the plugin's own key, to start Shizuku. While Shizuku runs as root it also adds that key to Android's trusted ADB keys and sets ADB to listen on port 5555 after restarts, which other devices on the network can reach but only with a key you allowed.
+- Only with **Start Shizuku as root at boot** on: ADB on the device itself, 127.0.0.1:5555, signed in with the plugin's own key, to start Shizuku. ADB listens on port 5555 because you set it to in [step 8](#8-make-it-survive-restarts-optional); other devices on the network can reach it, but only with a key someone allowed.
 
 Track details and playback state reach Home Assistant only through Kiosk Satellite's existing ESPHome connection.
 
@@ -251,9 +264,10 @@ Check the **Shizuku** status and the **AirPlay multi-room** reading on the plugi
 - **`su: inaccessible or not found`** Expected. These builds have no `su`. Use `adb root` from a computer, as in [step 5](#5-start-shizuku-as-root-once).
 - **No pairing code notification in Shizuku.** That is Wireless debugging, which you don't need. Use ADB over network on port 5555 instead, as in [step 3](#3-connect-from-the-computer).
 - **"adbd cannot run as root" or "ADB cannot switch to root"** Turn on **Rooted debugging** in Developer options.
-- **"Nothing answers on 127.0.0.1:5555"** ADB isn't listening on port 5555. Turn on **ADB over network**, or run `adb tcpip 5555` from a computer, then tap **Start** again.
+- **"Nothing answers on 127.0.0.1:5555"** ADB isn't kept on port 5555 after restarts. Do step 1 of [step 8](#8-make-it-survive-restarts-optional), then tap **Start** again.
+- **"Could not find Shizuku's starter"** The plugin only runs `libshizuku.so` from Shizuku's own package. Update Shizuku to version 13 or later.
 - **"Nobody allowed USB debugging"** The approval prompt timed out. Tap **Start** and approve **Allow USB debugging?** on the kiosk within a minute.
-- **"Allow USB debugging?" at every restart, with a different fingerprint each time.** Versions 0.4.0 to 0.6.1 lost their ADB key at each restart. Update, tick **Always allow** once more, and it stops.
+- **"Allow USB debugging?" at every restart, with a different fingerprint each time.** The plugin couldn't keep its key. The plugin log says why ("Could not save the ADB key"). Versions 0.4.0 to 0.6.1 had this problem; update.
 - **Shizuku says "Running as shell, not root".** It was started without `adb root`. Tap **Start**: the plugin restarts it as root.
 
 - **"start Shizuku as root…"** Shizuku isn't running, KS has no access, or Shizuku is running as shell (uid 2000) rather than root (uid 0).
@@ -297,4 +311,4 @@ Releases are built by `.github/workflows/build.yml` when you publish a GitHub re
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE). Kiosk Satellite's [plugin exception](https://github.com/jxlarrea/kiosk-satellite/blob/main/PLUGIN-EXCEPTION.md) allows independent plugins under their own license. The SDK interfaces in `sdk/` and the build tools in `tools/` come from the [Kiosk Satellite plugin template](https://github.com/jxlarrea/kiosk-satellite-plugins) under Apache-2.0.
+GPL-3.0-or-later. See [LICENSE](LICENSE). The ALAC decoder is ported from Apple's open-source ALAC decoder under Apache-2.0; see [NOTICE](NOTICE). Kiosk Satellite's [plugin exception](https://github.com/jxlarrea/kiosk-satellite/blob/main/PLUGIN-EXCEPTION.md) allows independent plugins under their own license. The SDK interfaces in `sdk/` and the build tools in `tools/` come from the [Kiosk Satellite plugin template](https://github.com/jxlarrea/kiosk-satellite-plugins) under Apache-2.0.

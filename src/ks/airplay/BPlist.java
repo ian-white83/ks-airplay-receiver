@@ -32,7 +32,7 @@ public final class BPlist {
         long top = readUInt(data, t + 16, 8);
         long tableOffset = readUInt(data, t + 24, 8);
         if (offsetSize < 1 || offsetSize > 8 || refSize < 1 || refSize > 8 || count <= 0 || count > 100000
-                || top >= count || tableOffset < 8 || tableOffset + count * offsetSize > t) {
+                || top < 0 || top >= count || tableOffset < 8 || tableOffset + count * offsetSize > t) {
             throw new IOException("Malformed binary plist trailer");
         }
         int[] offsets = new int[(int) count];
@@ -44,17 +44,34 @@ public final class BPlist {
         return new Reader(data, offsets, refSize).read((int) top, 0);
     }
 
+    /**
+     * Most objects one parse may build. Objects can be shared by reference, so a tiny plist of nested arrays that
+     * all point at the same child would otherwise expand to billions of objects.
+     */
+    static final int MAX_OBJECTS = 10000;
+
     private static final class Reader {
         final byte[] data;
         final int[] offsets;
         final int refSize;
 
-        Reader(byte[] data, int[] offsets, int refSize) { this.data = data; this.offsets = offsets; this.refSize = refSize; }
+        /** Objects and bytes left to build; both bound the work and memory one parse can take. */
+        int objectsLeft = MAX_OBJECTS;
+        long bytesLeft;
+
+        Reader(byte[] data, int[] offsets, int refSize) {
+            this.data = data;
+            this.offsets = offsets;
+            this.refSize = refSize;
+            bytesLeft = 2L * data.length;
+        }
 
         Object read(int ref, int depth) throws IOException {
             if (ref < 0 || ref >= offsets.length) throw new IOException("Bad object reference");
             if (depth > 32) throw new IOException("Binary plist nests too deeply");
+            if (--objectsLeft < 0) throw new IOException("Binary plist has too many objects");
             int pos = offsets[ref];
+            check(pos, 1);
             int marker = data[pos] & 0xff;
             int type = marker >> 4, info = marker & 0x0f;
             switch (type) {
@@ -82,6 +99,7 @@ public final class BPlist {
                 case 0x4: {
                     int[] lp = length(pos, info);
                     check(lp[1], lp[0]);
+                    spend(lp[0]);
                     byte[] out = new byte[lp[0]];
                     System.arraycopy(data, lp[1], out, 0, lp[0]);
                     return out;
@@ -89,11 +107,13 @@ public final class BPlist {
                 case 0x5: {
                     int[] lp = length(pos, info);
                     check(lp[1], lp[0]);
+                    spend(lp[0]);
                     return new String(data, lp[1], lp[0], ASCII);
                 }
                 case 0x6: {
                     int[] lp = length(pos, info);
-                    check(lp[1], lp[0] * 2);
+                    check(lp[1], 2L * lp[0]);
+                    spend(2L * lp[0]);
                     return new String(data, lp[1], lp[0] * 2, UTF16);
                 }
                 case 0x8: {
@@ -102,14 +122,16 @@ public final class BPlist {
                 }
                 case 0xA: {
                     int[] lp = length(pos, info);
-                    check(lp[1], lp[0] * refSize);
+                    check(lp[1], (long) lp[0] * refSize);
+                    spend((long) lp[0] * 8);
                     List<Object> list = new ArrayList<>(lp[0]);
                     for (int i = 0; i < lp[0]; i++) list.add(read(ref(lp[1] + i * refSize), depth + 1));
                     return list;
                 }
                 case 0xD: {
                     int[] lp = length(pos, info);
-                    check(lp[1], lp[0] * refSize * 2);
+                    check(lp[1], (long) lp[0] * refSize * 2);
+                    spend((long) lp[0] * 16);
                     Map<String, Object> map = new LinkedHashMap<>();
                     for (int i = 0; i < lp[0]; i++) {
                         Object key = read(ref(lp[1] + i * refSize), depth + 1);
@@ -125,7 +147,9 @@ public final class BPlist {
 
         int ref(int pos) throws IOException {
             check(pos, refSize);
-            return (int) readUInt(data, pos, refSize);
+            long r = readUInt(data, pos, refSize);
+            if (r < 0 || r >= offsets.length) throw new IOException("Bad object reference");
+            return (int) r;
         }
 
         /** {length, start of content}. */
@@ -141,8 +165,13 @@ public final class BPlist {
             return new int[] {(int) length, pos + 2 + size};
         }
 
-        void check(int pos, int length) throws IOException {
+        void check(long pos, long length) throws IOException {
             if (pos < 0 || length < 0 || pos + length > data.length - 32) throw new IOException("Truncated binary plist");
+        }
+
+        void spend(long bytes) throws IOException {
+            bytesLeft -= bytes;
+            if (bytesLeft < 0) throw new IOException("Binary plist expands too far");
         }
     }
 

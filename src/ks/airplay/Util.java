@@ -144,4 +144,37 @@ public final class Util {
     public static long getU32(byte[] b, int off) {
         return ((long) (b[off] & 0xff) << 24) | ((b[off + 1] & 0xff) << 16) | ((b[off + 2] & 0xff) << 8) | (b[off + 3] & 0xff);
     }
+
+    // ---------------------------------------------------------------- threads
+
+    /** Where a guarded thread reports what went wrong. */
+    public interface Logger { void log(String message); }
+
+    /**
+     * Wraps a task so nothing it throws, Errors included, leaves the thread. Plugins run inside Kiosk Satellite's
+     * process: an uncaught throwable on any thread would take the whole app down.
+     */
+    public static Runnable guard(final String name, final Runnable task, final Logger log) {
+        return new Runnable() {
+            @Override public void run() {
+                try {
+                    task.run();
+                } catch (Throwable t) {
+                    try {
+                        if (log != null) log.log(name + " stopped: " + t);
+                    } catch (Throwable ignored) {
+                        // nothing more to do
+                    }
+                }
+            }
+        };
+    }
+
+    /** Starts a guarded daemon thread. */
+    public static Thread thread(String name, Runnable task, Logger log) {
+        Thread t = new Thread(guard(name, task, log), name);
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
 }

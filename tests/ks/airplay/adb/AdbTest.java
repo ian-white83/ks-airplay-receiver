@@ -215,32 +215,32 @@ public final class AdbTest {
         };
 
         // First start: the prompt, then root, then the starter.
-        String out = new ShizukuStarter(key, "127.0.0.1", port).run("", false, 5000, 5000, progress);
+        String out = new ShizukuStarter(key, "127.0.0.1", port).run(false, 5000, 5000, progress);
         check(adbd.prompts == 1, "asked once to approve the key");
         check(steps.stream().anyMatch(s -> s.contains("Always allow")), "told the user to approve");
         check(adbd.root, "switched adbd to root");
         check(out.contains("exit with 0") || adbd.commands.size() == 1, "ran the starter");
         String script = adbd.commands.get(0);
-        check(script.startsWith("shell:[ \"$(getprop persist.adb.tcp.port)\" = 5555 ]"), "keeps port 5555");
-        check(script.contains("libshizuku.so") && script.contains("start.sh"), "finds the starter");
+        check(!script.contains("setprop") && !script.contains("adb_keys"), "changes nothing on the device but Shizuku");
+        check(script.contains("libshizuku.so"), "finds the starter in Shizuku's package");
+        check(!script.contains("start.sh") && !script.contains("/storage") && !script.contains("sdcard"), "never runs a script from shared storage");
 
         // Next boot: adbd starts as shell again, the key is known, no prompt.
         adbd.root = false;
         adbd.commands.clear();
-        new ShizukuStarter(key, "127.0.0.1", port).run("adb shell sh /sdcard/custom.sh", false, 5000, 5000, progress);
+        new ShizukuStarter(key, "127.0.0.1", port).run(false, 5000, 5000, progress);
         check(adbd.prompts == 1, "no second prompt");
-        check(adbd.commands.get(0).endsWith("\nsh /sdcard/custom.sh"), "custom command without the adb shell prefix");
 
         // Already root, check only.
         adbd.commands.clear();
-        new ShizukuStarter(key, "127.0.0.1", port).run("", true, 5000, 5000, progress);
-        check(adbd.commands.size() == 1 && !adbd.commands.get(0).contains("shizuku"), "check only does not restart Shizuku");
+        new ShizukuStarter(key, "127.0.0.1", port).run(true, 5000, 5000, progress);
+        check(adbd.commands.stream().noneMatch(c -> c.contains("shizuku") || c.contains("setprop")), "check only changes nothing");
 
         // Rooted debugging off.
         adbd.root = false;
         adbd.rootAllowed = false;
         try {
-            new ShizukuStarter(key, "127.0.0.1", port).run("", false, 5000, 5000, progress);
+            new ShizukuStarter(key, "127.0.0.1", port).run(false, 5000, 5000, progress);
             check(false, "should fail without rooted debugging");
         } catch (IOException e) {
             check(e.getMessage().contains("Rooted debugging"), "says to turn on Rooted debugging: " + e.getMessage());
@@ -250,7 +250,7 @@ public final class AdbTest {
         adbd.rootAllowed = true;
         adbd.approve = false;
         try {
-            new ShizukuStarter(AdbKey.generate("other"), "127.0.0.1", port).run("", false, 5000, 2000, progress);
+            new ShizukuStarter(AdbKey.generate("other"), "127.0.0.1", port).run(false, 5000, 2000, progress);
             check(false, "should fail when the key is refused");
         } catch (AdbClient.NotApproved expected) {
         }
@@ -260,10 +260,10 @@ public final class AdbTest {
         int dead = closed.getLocalPort();
         closed.close();
         try {
-            new ShizukuStarter(key, "127.0.0.1", dead).run("", false, 100, 1000, progress);
+            new ShizukuStarter(key, "127.0.0.1", dead).run(false, 100, 1000, progress);
             check(false, "should fail with nothing listening");
         } catch (IOException e) {
-            check(e.getMessage().contains("ADB over network"), "explains ADB over network: " + e.getMessage());
+            check(e.getMessage().contains("port " + dead), "explains the port: " + e.getMessage());
         }
         adbd.server.close();
         System.out.println("AdbTest passed");

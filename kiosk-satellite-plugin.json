@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.7.0",
+  "version": "1.0.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.11.14",
@@ -45,7 +45,7 @@
       "title": "Start Shizuku as root at boot",
       "default": false,
       "group": "Shizuku",
-      "description": "Multi-room needs Shizuku running as root, and Shizuku stops when the kiosk restarts. On, the plugin starts it at boot through this device's own ADB, as adb root and adb shell would from a computer. Needs Rooted debugging and ADB over network on port 5555. The plugin keeps its own ADB key on this device."
+      "description": "Optional, off by default. Multi-room needs Shizuku running as root, and Shizuku stops when the kiosk restarts. On, the plugin starts it at boot by signing in to this device's own ADB as root with a key you allow once, as adb root would from a computer. Needs Rooted debugging and ADB kept on port 5555, which you set up (see the README). Turning it off removes the plugin's key from Android's trusted ADB keys."
     },
     {
       "key": "port",
@@ -72,14 +72,6 @@
       "description": "For troubleshooting only. Leave empty for the default (0x401FCA00,0x1C340, as shairport-sync advertises). See the README."
     },
     {
-      "key": "shizukuCommand",
-      "type": "string",
-      "title": "Shizuku start command",
-      "default": "",
-      "group": "Advanced",
-      "description": "Leave empty to find Shizuku's starter automatically. Otherwise paste the command from Shizuku > Start via connected computer > View command."
-    },
-    {
       "key": "shizukuRunning",
       "type": "boolean",
       "title": "Shizuku is running as root",
@@ -90,10 +82,10 @@
     {
       "key": "adbKey",
       "type": "secret",
-      "title": "ADB key",
+      "title": "ADB key from an earlier version",
       "default": "",
       "group": "Advanced",
-      "description": "Set by the plugin when Start Shizuku as root at boot is on: the key it signs in to this device's ADB with, kept here so Android only asks once to allow it. Clear it to make a new key; Android then asks again."
+      "description": "Only versions 0.6.2 to 0.7.0 kept the boot start's ADB key here. The plugin moves it to private storage on this device and clears this setting by itself."
     }
   ],
   "commands": [
@@ -142,7 +134,7 @@
         "key": "shizukuRunning",
         "equals": false
       },
-      "description": "Starts Shizuku as root the same way the boot start does. The first time, approve the \"Allow USB debugging?\" prompt on the kiosk screen with Always allow."
+      "description": "Starts Shizuku as root through this device's ADB, the same way the boot start does. The first time, approve the \"Allow USB debugging?\" prompt on the kiosk screen with Always allow."
     },
     {
       "id": "checkShizuku",

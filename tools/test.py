@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='kiosk-plugin-test-') as directory:
     # Plugin code builds for Java 8 like the release build. Tests use JDK 17 APIs to cross-check the crypto.
     subprocess.run([tool('javac'), '-Xlint:-options', '--release', '8', '-cp', platform, '-d', str(classes), *map(str, main_sources)], check=True)
     subprocess.run([tool('javac'), '--release', '17', '-cp', os.pathsep.join([str(classes), platform]), '-d', str(tests), *map(str, test_sources)], check=True)
-    for test in ['ks.airplay.CoreTest', 'ks.airplay.FlowTest', 'ks.airplay.PluginTest', 'ks.airplay.adb.AdbTest', 'ks.airplay.OutputTest']:
+    for test in ['ks.airplay.CoreTest', 'ks.airplay.FlowTest', 'ks.airplay.PluginTest', 'ks.airplay.adb.AdbTest', 'ks.airplay.OutputTest', 'ks.airplay.SafetyTest']:
         subprocess.run([tool('java'), '-ea', f'-Dks.root={root}', '-cp', os.pathsep.join([str(tests), str(classes), platform]), test], check=True)
 
 subprocess.run([sys.executable, str(root / 'tools/test_android_sdk.py')], check=True)

@@ -57,6 +57,8 @@ public final class BufferedSession {
     private final Clock clock;
     private final byte[] key;
     private final int ct, spf;
+    /** Largest samples-per-frame a sender may ask for. AirPlay uses 352 (ALAC) or 1024 (AAC). */
+    public static final int MAX_SPF = 8192;
     private final ServerSocket server;
     private Thread readerThread, playerThread;
     private volatile boolean running = true;
@@ -102,17 +104,15 @@ public final class BufferedSession {
         this.clock = clock;
         this.key = sessionKey.clone();
         this.ct = ct;
+        if (spf > MAX_SPF) throw new IllegalArgumentException("spf " + spf + " is out of range");
         this.spf = spf > 0 ? spf : (ct == 2 ? 352 : 1024);
         server = new ServerSocket(0);
         readerThread = start("airplay-buffered", new Runnable() { @Override public void run() { acceptLoop(); } });
         playerThread = start("airplay-player", new Runnable() { @Override public void run() { playerLoop(); } });
     }
 
-    private static Thread start(String name, Runnable r) {
-        Thread t = new Thread(r, name);
-        t.setDaemon(true);
-        t.start();
-        return t;
+    private Thread start(String name, Runnable r) {
+        return Util.thread(name, r, new Util.Logger() { @Override public void log(String m) { platform.log(m); } });
     }
 
     public int dataPort() { return server.getLocalPort(); }
@@ -242,7 +242,7 @@ public final class BufferedSession {
         if (t == null || t == Thread.currentThread()) return;
         t.interrupt();
         try {
-            t.join(1500);
+            t.join(400);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

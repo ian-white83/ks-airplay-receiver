@@ -1,0 +1,23 @@
+AirPlay 2 Multi-Room for Kiosk Satellite
+Copyright (C) 2026 Ian White
+Licensed under the GNU General Public License, version 3 or later. See LICENSE.
+
+This plugin includes work derived from the following, used under their licenses:
+
+Apple Lossless Audio Codec (ALAC) reference decoder
+  src/ks/airplay/AlacDecoder.java is a Java port of the decoder in Apple's
+  open-source ALAC release (https://github.com/macosforge/alac).
+  Copyright (c) 2011 Apple Inc. All rights reserved.
+  Licensed under the Apache License, Version 2.0 (the "License"); you may not
+  use this file except in compliance with the License. You may obtain a copy
+  of the License at http://www.apache.org/licenses/LICENSE-2.0
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+  License for the specific language governing permissions and limitations
+  under the License.
+
+Kiosk Satellite plugin SDK and build tools
+  sdk/ and tools/ come from the Kiosk Satellite plugin template
+  (https://github.com/jxlarrea/kiosk-satellite-plugins).
+  Licensed under the Apache License, Version 2.0.

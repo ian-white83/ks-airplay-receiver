@@ -50,13 +50,8 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     private boolean sessionLive;
     private volatile DacpRemote remote;
     private volatile java.net.InetSocketAddress remoteAddress;
-    private final java.util.concurrent.ExecutorService net = java.util.concurrent.Executors.newSingleThreadExecutor(new java.util.concurrent.ThreadFactory() {
-        @Override public Thread newThread(Runnable r) {
-            Thread t = new Thread(r, "airplay-net");
-            t.setDaemon(true);
-            return t;
-        }
-    });
+    /** For DACP requests, which wait on the network. Made in start, shut down in stop. */
+    private volatile java.util.concurrent.ExecutorService net;
     private PtpClock ptp;
     private boolean redirected, ptpStarting;
     private String syncState = "";
@@ -67,7 +62,6 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     static final String START_BUTTON = "startShizuku", CHECK_BUTTON = "checkShizuku";
     private final java.util.concurrent.atomic.AtomicReference<String> starterRun = new java.util.concurrent.atomic.AtomicReference<>();
     private volatile Thread starter;
-    private boolean keyInstalled;
     private AdbKey adbKey;
 
     static final int REDIRECT_OFFSET = 10000;
@@ -102,7 +96,6 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         String deviceIdOverride = "";
         String features = "";
         boolean shizukuAtBoot = false;
-        String shizukuCommand = "";
         boolean shizukuRunning = false;
         String adbKey = "";
 
@@ -121,7 +114,6 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             s.deviceIdOverride = string(map, "deviceIdOverride", "").trim();
             s.features = string(map, "features", "").trim();
             s.shizukuAtBoot = bool(map, "shizukuAtBoot", s.shizukuAtBoot);
-            s.shizukuCommand = string(map, "shizukuCommand", "").trim();
             s.shizukuRunning = bool(map, "shizukuRunning", false);
             s.adbKey = string(map, "adbKey", "").trim();
             return s;
@@ -170,6 +162,13 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         });
         executor.setRemoveOnCancelPolicy(true);
         worker = executor;
+        net = java.util.concurrent.Executors.newSingleThreadExecutor(new ThreadFactory() {
+            @Override public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "airplay-net");
+                t.setDaemon(true);
+                return t;
+            }
+        });
         if (platform == null) {
             platform = new AndroidPlatform(new AndroidPlatform.Logger() {
                 @Override public void log(String message) { AirPlayPlugin.this.log(message); }
@@ -191,6 +190,16 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             status(message, true);
             log(message + " (" + e + ")");
         }
+        if (!settings.adbKey.isEmpty()) {
+            // An earlier version kept the ADB key in settings: move it to this device's private storage now.
+            post(new Runnable() { @Override public void run() {
+                try {
+                    adbKey();
+                } catch (Exception e) {
+                    log("Could not move the ADB key: " + e);
+                }
+            } });
+        }
         if (settings.shizukuAtBoot) {
             // Give Kiosk Satellite a moment to connect to a Shizuku that is already running.
             worker.schedule(new Runnable() { @Override public void run() { bootStart(); } }, 8, TimeUnit.SECONDS);
@@ -210,15 +219,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             ensureDeviceId(raw);
             return;
         }
-        if (previous != null && !next.adbKey.equals(previous.adbKey) && !next.adbKey.equals(savedKey)) {
-            // Cleared or replaced by the user: use (or make) that key from now on.
-            post(new Runnable() { @Override public void run() { adbKey = null; keyInstalled = false; prepareBootStart(); } });
-        }
         if (previous != null && next.shizukuRunning != previous.shizukuRunning) {
             post(new Runnable() { @Override public void run() { refreshShizuku(null); } });
         }
-        if (next.shizukuAtBoot && (previous == null || !previous.shizukuAtBoot)) {
-            post(new Runnable() { @Override public void run() { keyInstalled = false; prepareBootStart(); } });
+        if (previous != null && previous.shizukuAtBoot && !next.shizukuAtBoot) {
+            post(new Runnable() { @Override public void run() { revokeBootStart(); } });
         }
         if (next.needsRestart(previous)) {
             if (previous == null || !next.name.equals(previous.name)) nameResolved = false;
@@ -244,7 +249,6 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             post(new Runnable() { @Override public void run() {
                 if (server != null && ptp == null) startPtp();
                 if (starter == null) refreshShizuku(null);
-                prepareBootStart();
             } });
         } else if ("settings.button".equals(event)) {
             Object id = payload == null ? null : payload.get("id");
@@ -266,16 +270,23 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     public void stop() throws Exception {
         ScheduledExecutorService w = worker;
         if (w == null) return;
-        w.submit(new Runnable() {
+        w.submit(guard("stop", new Runnable() {
             @Override public void run() {
                 player = null;
+                // The root cleanup goes first, before any thread joins, so it is sent within the stop deadline.
+                removeRedirect();
                 stopReceiver(null);
                 stopPtp();
             }
-        });
+        }));
         w.shutdown();
+        // Kiosk Satellite gives stop() three seconds. Every join below has a short limit, and the sockets they
+        // wait on are closed first, so the threads end within a few milliseconds in practice.
         if (!w.awaitTermination(2500, TimeUnit.MILLISECONDS)) w.shutdownNow();
         worker = null;
+        java.util.concurrent.ExecutorService n = net;
+        net = null;
+        if (n != null) n.shutdownNow();
         starterRun.set(null);
         Thread t = starter;
         if (t != null) t.interrupt();
@@ -563,16 +574,20 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         ptp = null;
         AirPlayServer s = server;
         if (s != null) s.setClock(null);
+        removeRedirect();
         if (c != null) c.stop();
-        if (redirected) {
-            redirected = false;
-            try {
-                host.executeShizuku(new String[] {"/system/bin/sh", "-c", REDIRECT_REMOVE}, 15000, new PluginHost.CommandCallback() {
-                    @Override public void onResult(boolean ok, Object data, String error) {}
-                });
-            } catch (RuntimeException ignored) {
-                // stopping; the rules only point at ports nothing else uses
-            }
+    }
+
+    /** Take the PTP port redirect out. Kiosk Satellite may already have closed Shizuku when the plugin stops. */
+    private void removeRedirect() {
+        if (!redirected) return;
+        redirected = false;
+        try {
+            host.executeShizuku(new String[] {"/system/bin/sh", "-c", REDIRECT_REMOVE}, 15000, new PluginHost.CommandCallback() {
+                @Override public void onResult(boolean ok, Object data, String error) {}
+            });
+        } catch (RuntimeException ignored) {
+            // Shizuku is gone or busy; the rules only point at ports nothing else uses
         }
     }
 
@@ -627,100 +642,134 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         }
     }
 
+    static final String KEY_NAME = "ks-airplay@kiosk";
+    static final String KEY_FILE = "adbkey.v1";
+
     /**
-     * The plugin's ADB key. It lives in the plugin's secret ADB key setting, which Kiosk Satellite keeps across
-     * restarts and masks everywhere. Android remembers a key it allowed, so it must stay the same from boot to boot.
+     * The plugin's ADB key, kept in a private file on this device only: never in settings, so configuration
+     * exports and Fleet Management never copy it and no two kiosks share it. Android remembers a key someone
+     * allowed, so it must stay the same from boot to boot. Versions 0.6.2 to 0.7.0 kept it in a secret setting;
+     * it moves to the file once, and the setting is cleared after the file reads back the same key.
      */
     private AdbKey adbKey() throws Exception {
         if (adbKey != null) return adbKey;
-        String saved = settings.adbKey;
-        if (!saved.isEmpty()) {
+        java.io.File dir = platform.dataDir();
+        java.io.File file = dir == null ? null : new java.io.File(dir, KEY_FILE);
+        if (file != null && file.isFile()) {
             try {
-                adbKey = AdbKey.fromSecret(saved, KEY_NAME);
+                adbKey = AdbKey.fromSecret(readText(file), KEY_NAME);
+                clearOldKeySetting();
                 return adbKey;
             } catch (Exception e) {
                 log("The saved ADB key is unreadable, making a new one: " + e.getMessage());
             }
         }
-        AdbKey k = AdbKey.generate(KEY_NAME);
-        String secret = k.toSecret();
-        try {
-            host.updateSettings(Collections.<String, Object>singletonMap("adbKey", secret));
-            settings.adbKey = secret;
-            savedKey = secret;
-            log("Made a new ADB key and saved it in the plugin's settings. Android asks once to allow it.");
-        } catch (RuntimeException | LinkageError e) {
-            // Older Kiosk Satellite: keep it in a file instead.
-            java.io.File dir = platform.dataDir();
-            if (dir == null) {
-                log("Could not save the ADB key (" + e + "): Android will ask to allow it again after a restart");
-            } else {
-                k = AdbKey.loadOrCreate(new java.io.File(dir, "adbkey"), KEY_NAME);
-                log("Could not save the ADB key in settings (" + e + "); kept it in " + dir);
+        AdbKey k = null;
+        if (!settings.adbKey.isEmpty()) {
+            try {
+                k = AdbKey.fromSecret(settings.adbKey, KEY_NAME);
+            } catch (Exception e) {
+                log("The ADB key from an earlier version is unreadable: " + e.getMessage());
             }
         }
+        boolean migrated = k != null;
+        if (k == null) k = AdbKey.generate(KEY_NAME);
         adbKey = k;
-        return adbKey;
+        if (file == null) {
+            log("No private storage for the ADB key: Android will ask to allow it again after a restart");
+            return k;
+        }
+        try {
+            writeText(file, k.toSecret());
+            if (!AdbKey.fromSecret(readText(file), KEY_NAME).publicKey().equals(k.publicKey())) throw new java.io.IOException("read back a different key");
+            if (migrated) {
+                log("Moved the ADB key out of the plugin's settings into private storage on this device");
+                clearOldKeySetting();
+            } else {
+                log("Made a new ADB key for this device. Android asks once to allow it.");
+            }
+        } catch (Exception e) {
+            log("Could not save the ADB key (" + e + "): Android will ask to allow it again after a restart");
+        }
+        return k;
     }
 
-    static final String KEY_NAME = "ks-airplay@kiosk";
-    private String savedKey = "";
+    private void clearOldKeySetting() {
+        if (settings.adbKey.isEmpty()) return;
+        settings.adbKey = "";
+        safe(new Runnable() { @Override public void run() {
+            try {
+                host.updateSettings(Collections.<String, Object>singletonMap("adbKey", ""));
+            } catch (LinkageError ignored) {
+            }
+        } });
+    }
+
+    private static String readText(java.io.File f) throws java.io.IOException {
+        byte[] b = new byte[(int) Math.min(f.length(), 8192)];
+        try (java.io.InputStream in = new java.io.FileInputStream(f)) {
+            int n = 0;
+            while (n < b.length) {
+                int r = in.read(b, n, b.length - n);
+                if (r < 0) break;
+                n += r;
+            }
+            return new String(b, 0, n, Util.UTF8).trim();
+        }
+    }
+
+    private static void writeText(java.io.File f, String text) throws java.io.IOException {
+        java.io.File dir = f.getParentFile();
+        if (dir != null && !dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("cannot create " + dir);
+        java.io.File tmp = new java.io.File(f.getPath() + ".tmp");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+            out.write(text.getBytes(Util.UTF8));
+            out.getFD().sync();
+        }
+        tmp.setReadable(false, false);
+        tmp.setReadable(true, true);
+        if (!tmp.renameTo(f)) throw new java.io.IOException("cannot save " + f);
+    }
 
     /**
-     * While Shizuku already runs as root, trust this plugin's ADB key and keep adbd on port 5555 across reboots,
-     * so the next boot needs no prompt. If adbd ignores the file, the prompt at the first start covers it.
+     * Undo the boot start's access when it is turned off: take this plugin's key out of Android's trusted ADB
+     * keys and delete the key. Needs Shizuku running as root; without it the README says how to undo by hand.
+     * ADB on port 5555 was set up by the person, not the plugin, so it is left as they set it.
      */
-    private void prepareBootStart() {
-        if (keyInstalled || !settings.shizukuAtBoot || !rootReady(shizukuStateOrNull())) return;
-        final String line;
-        try {
-            line = adbKey().publicKey();
-        } catch (Exception e) {
-            log("Could not create the ADB key: " + e);
+    private void revokeBootStart() {
+        adbKey = null;
+        java.io.File dir = platform.dataDir();
+        if (dir != null) {
+            java.io.File f = new java.io.File(dir, KEY_FILE);
+            if (f.isFile() && !f.delete()) log("Could not delete the ADB key file " + f);
+        }
+        clearOldKeySetting();
+        if (!rootReady(shizukuStateOrNull())) {
+            log("Boot start turned off. Shizuku isn't running as root, so the plugin's key stays in Android's trusted ADB keys: use Revoke USB debugging authorizations in Developer options to remove it.");
             return;
         }
-        keyInstalled = true;
-        // Trust this key and drop keys earlier versions of the plugin left behind (they made a new one each boot).
-        String script = "k='" + line + "'; f=/data/misc/adb/adb_keys\n"
-                + "if ! grep -qxF \"$k\" \"$f\" 2>/dev/null || [ \"$(grep -c ' " + KEY_NAME + "$' \"$f\")\" != 1 ]; then\n"
-                + "  { grep -v ' " + KEY_NAME + "$' \"$f\" 2>/dev/null; echo \"$k\"; } > \"$f.tmp\" && cat \"$f.tmp\" > \"$f\"; rm -f \"$f.tmp\"\n"
-                + "  chown system:shell \"$f\"; chmod 640 \"$f\"; restorecon \"$f\" 2>/dev/null; echo 'trusted the ADB key'\n"
+        String script = "f=/data/misc/adb/adb_keys\n"
+                + "if grep -q ' " + KEY_NAME + "$' \"$f\" 2>/dev/null; then\n"
+                + "  grep -v ' " + KEY_NAME + "$' \"$f\" > \"$f.tmp\"; cat \"$f.tmp\" > \"$f\"; rm -f \"$f.tmp\"; echo 'removed the key'\n"
                 + "fi\n"
-                + "[ \"$(getprop persist.adb.tcp.port)\" = " + ShizukuStarter.PORT + " ] || { setprop persist.adb.tcp.port " + ShizukuStarter.PORT + "; echo 'kept ADB on port " + ShizukuStarter.PORT + "'; }\n"
                 + "exit 0";
         try {
             host.executeShizuku(new String[] {"/system/bin/sh", "-c", script}, 10000, new PluginHost.CommandCallback() {
                 @Override public void onResult(boolean ok, Object data, String error) {
                     Object out = data instanceof Map ? ((Map<?, ?>) data).get("stdout") : null;
-                    if (!ok) {
-                        // Usually another root command was still running: try again shortly.
-                        log("Boot start setup will retry: " + error);
-                        post(new Runnable() { @Override public void run() {
-                            keyInstalled = false;
-                            ScheduledExecutorService w = worker;
-                            if (w == null) return;
-                            try {
-                                w.schedule(new Runnable() { @Override public void run() { prepareBootStart(); } }, 10, TimeUnit.SECONDS);
-                            } catch (java.util.concurrent.RejectedExecutionException ignored) {
-                            }
-                        } });
-                    }
-                    else if (out != null && !String.valueOf(out).trim().isEmpty()) log("Boot start: " + String.valueOf(out).trim().replace("\n", ", "));
+                    if (!ok) log("Could not remove the plugin's key from Android's trusted ADB keys: " + error + ". Use Revoke USB debugging authorizations in Developer options.");
+                    else log("Boot start turned off: " + (out != null && String.valueOf(out).contains("removed") ? "removed the plugin's key from Android's trusted ADB keys" : "the plugin's key was not trusted"));
                 }
             });
         } catch (RuntimeException e) {
-            keyInstalled = false;
-            log("Boot start setup failed: " + e.getMessage());
+            log("Could not remove the plugin's key from Android's trusted ADB keys: " + e.getMessage() + ". Use Revoke USB debugging authorizations in Developer options.");
         }
     }
 
     /** At boot: start Shizuku as root unless it already runs that way. */
     private void bootStart() {
         if (!settings.shizukuAtBoot) return;
-        if (rootReady(shizukuStateOrNull())) {
-            prepareBootStart();
-            return;
-        }
+        if (rootReady(shizukuStateOrNull())) return;
         launchStarter(null, false);
     }
 
@@ -742,11 +791,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             log("Could not create the ADB key: " + e);
             return;
         }
-        final String command = settings.shizukuCommand;
         starterRun.set(run);
         if (run == null) sync("Multi-room off: starting Shizuku as root");
         if (!alreadyRunning) shizukuStatus("Starting…");
-        Thread t = new Thread(new Runnable() {
+        Thread t = new Thread(guard("airplay-shizuku", new Runnable() {
             @Override public void run() {
                 String error = null, output = "";
                 // At boot nobody may be at the screen to allow the key: keep asking for up to ten minutes.
@@ -754,7 +802,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 for (int attempt = 1; attempt <= attempts; attempt++) {
                 try {
                     error = null;
-                    output = new ShizukuStarter(key).run(command, alreadyRunning, run == null ? 120000 : 10000, 60000, new ShizukuStarter.Progress() {
+                    output = new ShizukuStarter(key).run(alreadyRunning, run == null ? 120000 : 10000, 60000, new ShizukuStarter.Progress() {
                         @Override public boolean report(String message) {
                             if (Thread.currentThread().isInterrupted()) return false;
                             if (message == null) return run == null || run.equals(starterRun.get());
@@ -804,7 +852,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 if (run != null && run.equals(starterRun.get())) setup(run, err == null ? "success" : "error", message);
                 starterRun.compareAndSet(run, null);
             }
-        }, "airplay-shizuku");
+        }), "airplay-shizuku");
         t.setDaemon(true);
         starter = t;
         t.start();
@@ -959,8 +1007,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     /** Play/pause or skip on the sender, over DACP. Runs on the network thread. */
     private void remoteControl(final String command) {
         final DacpRemote r = remote;
-        if (r == null) return;
-        net.execute(new Runnable() { @Override public void run() {
+        final java.util.concurrent.ExecutorService n = net;
+        if (r == null || n == null) return;
+        try {
+            n.execute(guard("DACP remote control", new Runnable() { @Override public void run() {
             for (int attempt = 0; attempt < 2; attempt++) {
                 java.net.InetSocketAddress address = remoteAddress;
                 if (address == null) {
@@ -980,7 +1030,14 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                     if (attempt == 1) log("Remote control failed: " + e.getMessage());
                 }
             }
-        } });
+        } }));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // stopping
+        }
+    }
+
+    private Runnable guard(String name, Runnable task) {
+        return Util.guard(name, task, new Util.Logger() { @Override public void log(String m) { AirPlayPlugin.this.log(m); } });
     }
 
     // ---------------------------------------------------------------- Kiosk Satellite output
@@ -1017,7 +1074,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         ScheduledExecutorService w = worker;
         if (w == null) return;
         try {
-            w.execute(task);
+            w.execute(guard("airplay-control", task));
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
             // stopping
         }

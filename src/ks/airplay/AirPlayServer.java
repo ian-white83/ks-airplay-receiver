@@ -69,12 +69,14 @@ public final class AirPlayServer {
         socket.bind(new InetSocketAddress(config.port), 8);
         serverSocket = socket;
         running = true;
-        acceptThread = new Thread(new Runnable() {
+        acceptThread = Util.thread("airplay-accept", new Runnable() {
             @Override public void run() { acceptLoop(); }
-        }, "airplay-accept");
-        acceptThread.setDaemon(true);
-        acceptThread.start();
+        }, logger());
         return socket.getLocalPort();
+    }
+
+    private Util.Logger logger() {
+        return new Util.Logger() { @Override public void log(String m) { platform.log(m); } };
     }
 
     public int port() {
@@ -100,9 +102,7 @@ public final class AirPlayServer {
                     }
                     connections.add(connection);
                 }
-                Thread t = new Thread(connection, "airplay-rtsp");
-                t.setDaemon(true);
-                t.start();
+                Util.thread("airplay-rtsp", connection, logger());
             } catch (IOException e) {
                 if (running) platform.log("AirPlay accept failed: " + e.getMessage());
             }
@@ -123,7 +123,7 @@ public final class AirPlayServer {
         }
         for (RtspConnection c : all) c.close();
         try {
-            acceptThread.join(1000);
+            acceptThread.join(400);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
