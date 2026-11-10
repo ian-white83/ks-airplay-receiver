@@ -45,7 +45,7 @@
       "title": "Start Shizuku as root at boot",
       "default": false,
       "group": "Shizuku",
-      "description": "Optional, off by default. Multi-room needs Shizuku running as root, and Shizuku stops when the kiosk restarts. On, the plugin starts it at boot by signing in to this device's own ADB as root with a key you allow once, as adb root would from a computer. Needs Rooted debugging and ADB kept on port 5555, which you set up (see the README). Turning it off removes the plugin's key from Android's trusted ADB keys."
+      "description": "Optional. Shizuku stops when the kiosk restarts, and multi-room needs it running as root. On, the plugin starts it at boot by signing in to this device's own ADB as root with a key you allow once. Needs Rooted debugging and ADB kept on port 5555 (see the README). Turning it off removes the plugin's key from Android's trusted ADB keys."
     },
     {
       "key": "port",

@@ -37,3 +37,12 @@ subprocess.run([sys.executable, str(root / 'tools/test_plugin_manifest.py')], ch
 
 subprocess.run([sys.executable, str(root / "tools/test_plugin_assets.py")], check=True)
 
+
+# Text limits Kiosk Satellite enforces when it installs (PluginManifest.kt), which the manifest checker doesn't cover.
+import json
+manifest = json.loads((root / 'kiosk-satellite-plugin.json').read_text(encoding='utf-8'))
+assert len(manifest['description']) <= 1000, 'plugin description over 1000 characters'
+for item in manifest.get('settings', []) + manifest.get('buttons', []):
+    text = item.get('description', '')
+    assert len(text) <= 400, f"description of {item.get('key') or item.get('id')} is {len(text)} characters, over 400"
+print('Manifest text limits OK')
