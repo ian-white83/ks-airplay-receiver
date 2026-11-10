@@ -15,7 +15,7 @@ Open a [bug report](https://github.com/ian-white83/ks-airplay-receiver/issues/ne
 
 Open a [feature request](https://github.com/ian-white83/ks-airplay-receiver/issues/new?template=feature_request.yml). Say what you want to do, not only how. That leaves room for a simpler way to get there.
 
-Some things depend on Kiosk Satellite or Android rather than this plugin. Kiosk Satellite's own floating player and Now Playing view are one example: they need a plugin SDK addition. Those belong in [Kiosk Satellite's issues](https://github.com/jxlarrea/kiosk-satellite/issues).
+Some things depend on Kiosk Satellite or Android rather than this plugin. How Now Playing, lyrics and ducking look and behave is one example: Kiosk Satellite draws them for every player. Those belong in [Kiosk Satellite's issues](https://github.com/jxlarrea/kiosk-satellite/issues).
 
 ## Changing the code
 

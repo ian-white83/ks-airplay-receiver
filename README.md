@@ -2,17 +2,12 @@
 
 Turns a [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) kiosk into an AirPlay 2 speaker that you can group with HomePods, Apple TVs and other AirPlay 2 speakers. Pick several speakers in the AirPlay menu on an iPhone, iPad or Mac and they play in sync.
 
-Kiosk Satellite already has its own AirPlay receiver for single-speaker playback. This plugin adds what that receiver doesn't: AirPlay 2 buffered audio locked to the sender's clock, so the kiosk can be part of a group.
-
-> **Turn off Kiosk Satellite's own AirPlay receiver.** If both run, the kiosk shows up twice in the AirPlay menu, and only this plugin's entry can join a group. In Kiosk Satellite, open **Settings > Media Player > AirPlay** and turn off **Enable AirPlay receiver**. That section only shows while **AirPlay** is the picked **Player**; if it isn't, the built-in receiver is already off.
+It's an AirPlay 2 player for Kiosk Satellite's Media Player. Pick it under **Settings > Media Player > Player**, in place of Kiosk Satellite's built-in AirPlay receiver: that one plays to a single speaker, while this one adds AirPlay 2 buffered audio locked to the sender's clock, so the kiosk can be part of a group.
 
 - Groups with other AirPlay 2 speakers for multi-room audio.
 - Follows the sender's volume slider.
-- Lyrics in time with the music in the full-screen player.
-- Shows what's playing: a floating player or a full-screen player with large cover art over the dashboard, and the same full-screen view in place of the screensaver while AirPlay plays.
-- Publishes what is playing to Home Assistant, with a switch to turn the receiver off.
-- Turns AirPlay audio down while Voice Satellite listens and answers.
-- Can wake the screen when playback starts, or run any gesture action through its triggers.
+- Plays through Kiosk Satellite's own audio output, so its Now Playing view and floating player, synced lyrics, assistant ducking, media volume and echo cancellation all work with AirPlay, as with any Kiosk Satellite player.
+- Reports multi-room and Shizuku status to Home Assistant, with triggers when playback starts and stops.
 - Works on kiosks without a screen, such as an Echo Dot.
 
 This plugin is not affiliated with, endorsed by or sponsored by Apple Inc. AirPlay, HomePod, iPhone, iPad and Mac are trademarks of Apple Inc.
@@ -22,7 +17,7 @@ This plugin is not affiliated with, endorsed by or sponsored by Apple Inc. AirPl
 For multi-room you need:
 
 - **A rooted kiosk whose Android has Rooted debugging.** LineageOS builds have it, including Kiosk Satellite's Echo builds. Without root the plugin still plays AirPlay 2 audio, but not in sync with other speakers.
-- **Kiosk Satellite 2026.10.45 or later** with Plugin Manager turned on.
+- **Kiosk Satellite 2026.11.14 or later** with Plugin Manager turned on.
 - **[Shizuku](https://shizuku.rikka.app/) 13 or later** on the kiosk. Setup below shows how to install it without an app store.
 - **A computer with ADB, once**, to install Shizuku and start it the first time. Get [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) for Windows, macOS or Linux. After setup the plugin starts Shizuku by itself, so you don't need the computer again.
 - **The kiosk and your Apple devices on the same network**, with mDNS and multicast allowed between them (no Wi-Fi client isolation or separate VLAN).
@@ -108,11 +103,11 @@ Open Shizuku: it should say **Shizuku is running** with **root** as the user. Ro
 
 Install it from Community Plugins or by URL, as in [Installation](#installation).
 
-Then turn off Kiosk Satellite's own AirPlay receiver, so the kiosk doesn't show up twice in the AirPlay menu: **Settings > Media Player > AirPlay > Enable AirPlay receiver** off. If **AirPlay** isn't the picked **Player** under **Settings > Media Player**, it's already off.
+Then pick it as the player: open **Settings > Media Player > Player** and choose **AirPlay 2**. Kiosk Satellite runs one player at a time, so this takes its built-in AirPlay receiver offline and the kiosk shows up once in the AirPlay menu. The plugin only advertises and plays while it is the picked player.
 
 ### 7. Give Kiosk Satellite access to Shizuku
 
-On the plugin's page in **Plugin Manager** (or in **Settings > Device > Shizuku**), tap **Shizuku access** and approve Shizuku's prompt on the kiosk. The plugin's **Shizuku** status should say **Running as root**, and its **AirPlay multi-room** reading **Multi-room ready** within a few seconds.
+On the plugin's page in **Plugin Manager** (or in **Settings > Device > Shizuku**), tap **Shizuku access** and approve Shizuku's prompt on the kiosk. The plugin's **Shizuku** status should say **Running as root**, and its **AirPlay multi-room** reading **Multi-room ready** within a few seconds (once **AirPlay 2** is the picked player).
 
 ### 8. Make it survive restarts
 
@@ -147,9 +142,9 @@ Apart from the optional boot start above, nothing else runs as root. Kiosk Satel
 | Works | Does not work |
 | --- | --- |
 | Grouping with HomePods, Apple TVs and AirPlay 2 speakers from Control Center or the Music app | Screen mirroring and video |
-| iOS, iPadOS and macOS senders | AirPlay 1 senders: Kiosk Satellite's own receiver plays those |
+| iOS, iPadOS and macOS senders | AirPlay 1-only senders, unless you pick Kiosk Satellite's built-in AirPlay player instead |
 | AAC and ALAC buffered audio, 44.1 kHz stereo | 48 kHz and lossless 24-bit formats (the plugin doesn't offer them, so senders use 44.1 kHz) |
-| Volume, track info, cover art, synced lyrics | Password protection |
+| Volume, track info, cover art and synced lyrics, through Kiosk Satellite's Now Playing | Password protection |
 | | Play, pause and skip from the kiosk: see [Playback controls](#playback-controls) |
 | | Choosing which speakers play from the kiosk: the iPhone or Mac picks the group |
 | | Adding the kiosk to the Apple Home app has not been tested and may not work |
@@ -178,26 +173,8 @@ The **Shizuku** status under the button shows whether Shizuku is running as root
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Audio offset | 0 s | Shifts AirPlay audio later (positive) or earlier (negative), from −3 to +3 seconds, to line it up with video or other speakers. Changes apply straight away |
-| Lower AirPlay while the assistant talks | On | Turns AirPlay down while Voice Satellite is listening, thinking or answering |
-| Lowered volume | 20% | How loud AirPlay stays while the assistant talks |
-| Wake the screen when playback starts | Off | Dismisses the screensaver and wakes the display when audio starts |
 
-### Now Playing
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| Show the player | While playing | When the player shows over the dashboard: **Off**, **On track change** (8 seconds when a track starts) or **While playing** |
-| Player style | Floating | **Floating**: a card with the cover art, track, artist and progress, and a button that opens the full-screen player. **Full screen**: large cover art, the track, artist, album and progress over the whole dashboard, on a background tinted from the artwork, and a button that shrinks it to the floating card |
-| Floating player position | Bottom | Top or bottom of the screen |
-| Lyrics | On | A lyrics button in the full-screen player, with lyrics in time with the music from [LRCLIB](https://lrclib.net), the free database Kiosk Satellite's own Now Playing uses. The current line lights up and stays in view. Tracks with only plain lyrics show them without timing |
-| Lyrics timing | 0 s | Moves the lyrics against the music, from -3 to +3 seconds. Positive values show each line earlier |
-| In the screensaver | When the screensaver starts | **When the screensaver starts** shows the full-screen view instead of your screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. **Right away** also starts the screensaver as soon as playback starts. **Off** leaves the screensaver alone. Needs the screensaver turned on in Kiosk Satellite |
-
-The floating and full-screen players work whether or not the screensaver is on. Back closes either one: the full-screen player shrinks to the floating card, and the floating card stays away until the next track.
-
-The screensaver view is a plugin screensaver, listed as **AirPlay Now Playing (AirPlay 2 Multi-Room)**. While AirPlay plays, the plugin makes it the screensaver, and puts your own screensaver back 15 seconds after playback stops. Your saved screensaver setting is never changed. Close the view the way you close any screensaver.
-
-Kiosk Satellite's built-in floating player and Now Playing view can't show this plugin's audio yet: plugins have no way to feed them. These views stand in until they can.
+Now Playing, lyrics, the floating player, the screensaver view, assistant ducking and waking the screen are Kiosk Satellite's own Media Player settings, under **Settings > Media Player**. They apply to AirPlay like any other player.
 
 ### Advanced
 
@@ -205,22 +182,18 @@ Kiosk Satellite's built-in floating player and Now Playing view can't show this 
 | --- | --- | --- |
 | Port | 7100 | TCP port for AirPlay connections. The default keeps clear of Kiosk Satellite's own receiver |
 | AirPlay device ID | empty | Empty: made from this device, so every kiosk has its own. Only for troubleshooting; Fleet Management copies a value set here to every kiosk on the profile |
+| ADB key | empty, secret | The plugin's ADB key for the boot start, made on first use. See [step 8](#8-make-it-survive-restarts) |
 | Feature flags | empty | For troubleshooting only. Empty advertises `0x401FCA00,0x1C340`, the set shairport-sync uses |
 | Shizuku is running as root | set by the plugin | Switches the button between **Start** and **Started**. The plugin keeps it in step with Shizuku, so changing it has no effect |
 | Shizuku start command | empty | Empty finds Shizuku's starter automatically. Otherwise the command from **Shizuku > Start via connected computer > View command** |
 
 ## Home Assistant
 
-The plugin adds these entities to the kiosk's ESPHome device:
+What's playing, the playback state and the volume reach Home Assistant through Kiosk Satellite's own media player entity, like any player. The plugin adds:
 
 | Entity | Type | State |
 | --- | --- | --- |
-| AirPlay playing | Binary sensor | On while audio is playing |
-| AirPlay track, AirPlay artist, AirPlay album | Text sensors | The current track's details, when the sender provides them |
-| AirPlay source | Text sensor | The name of the connected iPhone, iPad or Mac |
-| AirPlay volume | Sensor | The sender's volume slider, 0 to 100% |
 | AirPlay multi-room | Text sensor | Whether PTP sync is running and which sender clock it follows, or why it is off |
-| AirPlay receiver | Switch | Turns the receiver off and on |
 | Shizuku | Text sensor | Whether Shizuku runs as root, as shell or not at all, or is starting |
 
 The Remote Admin Overview also gets an **AirPlay** status tile.
@@ -241,16 +214,16 @@ Fleet Management copies a plugin's settings from the leader to every kiosk on th
 
 The only remote control an unofficial receiver can use is DACP, the older AirPlay remote. iPhones and iPads don't offer it when they play to AirPlay 2 speakers: the plugin checks what each sender offers, and they send no remote. AirPlay 2's own remote control isn't publicly documented.
 
-The plugin keeps DACP support for any sender that does offer it. Then the players show play/pause and skip buttons; otherwise they show none.
+The plugin keeps DACP support for any sender that does offer it. Then Kiosk Satellite's Now Playing shows play/pause and skip buttons; otherwise it shows none.
 
 ## Actions and triggers
 
-- **Disconnect AirPlay sender** and **Restart AirPlay receiver** can go in the drawer, on a gesture or on an ESPHome button. **Play or pause AirPlay**, **Next AirPlay track** and **Previous AirPlay track** are listed too, but do nothing with iPhones and iPads: see [Playback controls](#playback-controls).
+- **Disconnect AirPlay sender** and **Restart AirPlay receiver** can go in the drawer, on a gesture or on an ESPHome button.
 - **AirPlay playback started** and **AirPlay playback stopped** are gesture triggers under **Gestures > Plugin trigger**.
 
 ## Privacy and network use
 
-The plugin contacts one server, and only with **Lyrics** on: [LRCLIB](https://lrclib.net), to look up lyrics. It sends the track's title, artist, album and length, nothing else. Turn **Lyrics** off and the plugin contacts no server at all.
+The plugin contacts no server on the internet. It hands track details and cover art to Kiosk Satellite's Media Player, which may look up lyrics as its own settings say, as it does for any player.
 
 On the local network it uses:
 
@@ -258,10 +231,10 @@ On the local network it uses:
 - The control port, 7100 by default, over TCP. Senders pair with the standard AirPlay 2 transient pairing, and the connection is then encrypted.
 - One TCP port per stream for audio and one for events, picked at random.
 - UDP 319 and 320 (redirected to 10319 and 10320) to receive PTP timing from senders. It also sends a short PTP Announce to each member of the group the sender lists, so the device leading the group's clock starts sending it timing, as shairport-sync's nqptp does.
-- Remote control (DACP), only for a sender that offers it: when you tap play/pause or skip, it finds the sender's `_dacp._tcp` service over Bonjour and sends it the command over HTTP, with the remote ID the sender gave it.
+- Remote control (DACP), only for a sender that offers it: when you tap play/pause or skip in Now Playing, it finds the sender's `_dacp._tcp` service over Bonjour and sends it the command over HTTP, with the remote ID the sender gave it.
 - Only with **Start Shizuku as root at boot** on: ADB on the device itself, 127.0.0.1:5555, signed in with the plugin's own key, to start Shizuku. While Shizuku runs as root it also adds that key to Android's trusted ADB keys and sets ADB to listen on port 5555 after restarts, which other devices on the network can reach but only with a key you allowed.
 
-Track details and playback state reach Home Assistant only through the kiosk's existing ESPHome connection.
+Track details and playback state reach Home Assistant only through Kiosk Satellite's existing ESPHome connection.
 
 ## Troubleshooting
 
@@ -278,8 +251,9 @@ Check the **Shizuku** status and the **AirPlay multi-room** reading on the plugi
 - **"start Shizuku as root…"** Shizuku isn't running, KS has no access, or Shizuku is running as shell (uid 2000) rather than root (uid 0).
 - **"the iptables redirect failed"** The reading includes the error. IPv6 failures alone are only logged. Most senders time over IPv4.
 - **"Multi-room ready, no clock yet"** The redirect is in place but no PTP traffic has arrived. Clocks appear once a sender starts playing to a group that includes the kiosk. Check that multicast and UDP between the phone and the kiosk aren't blocked, for example by Wi-Fi client isolation or a separate VLAN.
-- **The kiosk shows up twice in the AirPlay menu.** Kiosk Satellite's own AirPlay 1 receiver is still on. Turn off **Settings > Media Player > AirPlay > Enable AirPlay receiver**. Only this plugin's entry can join a group.
-- **The kiosk is not in the AirPlay menu.** The phone and the kiosk must be on the same network with mDNS allowed. "Bonjour is unavailable" in the status line means the device could not advertise.
+- **"Not the selected player"** Pick **AirPlay 2** under **Settings > Media Player > Player**. The plugin only advertises and plays while it is the picked player.
+- **"This Kiosk Satellite has no plugin players"** This version needs Kiosk Satellite's player support. Update Kiosk Satellite.
+- **The kiosk is not in the AirPlay menu.** Check that **AirPlay 2** is the picked player. The phone and the kiosk must be on the same network with mDNS allowed. "Bonjour is unavailable" in the status line means the device could not advertise.
 - **Audio plays but drifts from the other speakers.** Send me the plugin log from Plugin Manager. It shows the clock offset and the playout corrections.
 
 ## How it works
@@ -288,8 +262,9 @@ The receiver follows [shairport-sync](https://github.com/mikebrady/shairport-syn
 
 - **Pairing:** HomeKit transient pair-setup (SRP-6a, 3072-bit, SHA-512, PIN 3939). After that, the control connection is encrypted with ChaCha20-Poly1305 using HKDF-derived keys.
 - **Timing:** a PTP follower in the style of nqptp. It reads Sync and Follow_Up messages, estimates each sender clock's offset from Android's monotonic clock, and favours the fastest packets.
+- **Output:** the plugin is a Kiosk Satellite player. It writes PCM to the output Kiosk Satellite opens for it, which applies media volume, ducking and the echo canceller's reference.
 - **Audio:** the sender pushes encrypted packets over TCP seconds ahead. The plugin decrypts each with its session key and decodes ALAC in Java or AAC through Android's MediaCodec.
-- **Playout:** SETRATEANCHORTIME pins one RTP frame to one moment on the sender's clock. The plugin works out when every frame is due and compares that with AudioTrack's playback timestamps. It pads or trims at the start, then drops or repeats single frames to stay within a millisecond.
+- **Playout:** SETRATEANCHORTIME pins one RTP frame to one moment on the sender's clock. The plugin works out when every frame is due and compares that with the output's playback timestamps. It pads or trims at the start, then drops or repeats single frames to stay within a millisecond.
 - **Crypto:** ChaCha20-Poly1305, Ed25519 and X25519 are implemented in Java, because Android 7 (the Echo Dot) ships none of them.
 
 ## Development

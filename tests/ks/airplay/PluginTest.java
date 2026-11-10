@@ -10,11 +10,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-import me.jxl.kiosk.plugins.OverlayFactory;
-import me.jxl.kiosk.plugins.OverlaySpec;
+import me.jxl.kiosk.plugins.AudioOutput;
+import me.jxl.kiosk.plugins.PlayerListener;
 import me.jxl.kiosk.plugins.PluginHost;
+import me.jxl.kiosk.plugins.PluginPlayer;
 
-/** The plugin's lifecycle against a fake Kiosk Satellite host: start, settings, commands, switch and stop. */
+/** The plugin's lifecycle against a fake Kiosk Satellite host: start, the pick, settings, commands and stop. */
 public final class PluginTest {
     static final int PORT = 47000 + (int) (Math.random() * 1000);
 
@@ -54,10 +55,15 @@ public final class PluginTest {
         static void validKey(String key) {
             if (!key.matches("[a-z][a-z0-9_]{0,39}")) throw new IllegalArgumentException("Invalid key " + key);
         }
-        @Override public void showOverlay(String key, OverlaySpec spec, OverlayFactory factory) { validKey(key); calls.add("overlay:" + key); }
-        @Override public void hideOverlay(String key) { validKey(key); calls.add("hide:" + key); }
         @Override public void fireTrigger(String id) { calls.add("trigger:" + id); }
-        @Override public void publishScreensaverView(String key, String title, OverlayFactory factory) { validKey(key); calls.add("screensaver:" + key); }
+        volatile PlayerListener player;
+        @Override public void publishPlayer(String key, String title, PlayerListener listener) {
+            validKey(key);
+            TestSupport.check(title.length() <= 80, "player title length");
+            player = listener;
+            calls.add("player:" + key);
+        }
+        @Override public void removePlayer(String key) { calls.add("removePlayer:" + key); }
         @Override public boolean isHeadless() { return false; }
         volatile Map<String, Object> shizuku;
         @Override public Map<String, Object> shizukuState() {
@@ -68,6 +74,32 @@ public final class PluginTest {
             calls.add("shizuku-exec");
             callback.onResult(false, null, "not in tests");
         }
+    }
+
+    /** Kiosk Satellite's side of the pick: what the plugin shows and the output it plays to. */
+    static final class FakePlayer implements PluginPlayer {
+        final List<Map<String, Object>> states = new CopyOnWriteArrayList<>();
+        final OutputTest.FakeOutput output = new OutputTest.FakeOutput();
+        volatile boolean active = true;
+        @Override public void update(Map<String, Object> state) { states.add(new HashMap<>(state)); }
+        @Override public void queueChanged() {}
+        @Override public boolean isActive() { return active; }
+        @Override public AudioOutput openAudio(int sampleRate, int channels, int encoding) {
+            TestSupport.check(active, "audio opened only while picked");
+            TestSupport.check(encoding == ENCODING_PCM_16 && channels == 2 && sampleRate == 44100, "16-bit stereo 44.1 kHz");
+            return output;
+        }
+        Map<String, Object> last() { return states.isEmpty() ? null : states.get(states.size() - 1); }
+    }
+
+    static void waitForState(FakePlayer p, String state, String title) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < deadline) {
+            Map<String, Object> m = p.last();
+            if (m != null && state.equals(m.get("state")) && (title == null || title.equals(m.get("title")))) return;
+            Thread.sleep(20);
+        }
+        throw new AssertionError("Player state never became " + state + " " + title + ": " + p.last());
     }
 
     public static void main(String[] args) throws Exception {
@@ -82,70 +114,60 @@ public final class PluginTest {
         TestSupport.check(System.nanoTime() - t0 < 3_000_000_000L, "start returns within the callback deadline");
         String id = (String) host.saved.get("deviceId");
         TestSupport.check(AirPlayConfig.validDeviceId(id), "device ID generated and saved: " + id);
-        TestSupport.check(host.calls.contains("subscribe:voice.state"), "subscribes to voice state");
-        TestSupport.check(host.calls.contains("switch:receiver=true") && host.calls.contains("binary:playing=false"), "entities published");
-
-        // KS calls configure with the saved device ID.
+        TestSupport.check(host.calls.contains("player:" + AirPlayPlugin.PLAYER_KEY) && host.player != null, "publishes its player");
         settings.put("deviceId", id);
         plugin.configure(settings);
+        Thread.sleep(300);
+        waitClosed(); // nothing serves before the pick
+        TestSupport.check(host.lastStatus.equals(AirPlayPlugin.NOT_PICKED), "says to pick it: " + host.lastStatus);
+
+        // Picked under Media Player > Player: the receiver starts.
+        FakePlayer picked = new FakePlayer();
+        host.player.onActivate(picked);
         Map<String, Object> info = waitForInfo("Echo Show 8");
         TestSupport.check(id.equals(info.get("deviceID")), "advertises the saved device ID");
+        waitForState(picked, "idle", null);
+        TestSupport.check(((List<?>) picked.last().get("actions")).isEmpty(), "no buttons without a remote");
 
         settings.put("name", "Kitchen");
         plugin.configure(settings);
         waitForInfo("Kitchen");
-
-        plugin.onEvent("ks.voice.state", java.util.Collections.<String, Object>singletonMap("state", "listening"));
-        plugin.onEvent("ks.voice.state", java.util.Collections.<String, Object>singletonMap("state", "idle"));
         plugin.execute("restart", new HashMap<String, Object>());
         waitForInfo("Kitchen");
 
-        // A sender plays: the full-screen view becomes the screensaver and the floating player appears.
-        TestSupport.check(host.calls.contains("screensaver:" + AirPlayPlugin.SCREENSAVER_KEY), "full-screen view published as a screensaver");
+        // A sender plays: Kiosk Satellite hears what plays.
         plugin.onSessionStarted("Ian's iPhone");
         Map<String, String> track = new HashMap<>();
         track.put("title", "Song");
         track.put("artist", "Band");
         plugin.onMetadata(track);
         plugin.onAudioActive(true);
-        waitForCall(host, "command:setScreensaverMode");
-        waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
-        waitForCall(host, "text:track=Song");
+        waitForState(picked, "playing", "Song");
+        TestSupport.check("Band".equals(picked.last().get("artist")), "artist sent");
         waitForCall(host, "trigger:playbackStarted");
-
-        TestSupport.check(host.calls.contains("text:shizuku=Not running"), "Shizuku reading published");
-        // Full-screen style: the full-screen player opens over the dashboard, without the screensaver.
-        host.calls.clear();
-        settings.put("nowPlaying", "While playing");
-        settings.put("playerStyle", "Full screen");
-        plugin.configure(settings);
-        waitForCall(host, "overlay:" + AirPlayPlugin.FULL_OVERLAY);
-        TestSupport.check(!host.calls.contains("command:startScreensaver"), "full screen needs no screensaver");
-        // Back (or its minimise button) shrinks it to the floating card.
-        host.calls.clear();
-        plugin.onEvent("overlay.closed", java.util.Collections.<String, Object>singletonMap("key", AirPlayPlugin.FULL_OVERLAY));
-        waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
-        TestSupport.check(!host.calls.contains("overlay:" + AirPlayPlugin.FULL_OVERLAY), "stays minimised");
-        // Floating style with the card closed by back: it stays closed until the next track.
-        host.calls.clear();
-        settings.put("playerStyle", "Floating");
-        plugin.configure(settings);
-        waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
-        TestSupport.check(!host.calls.contains("overlay:" + AirPlayPlugin.FULL_OVERLAY), "floating style shows the card");
-        plugin.onEvent("overlay.closed", java.util.Collections.<String, Object>singletonMap("key", AirPlayPlugin.OVERLAY));
-        host.calls.clear();
-        track.put("title", "Next song");
-        plugin.onMetadata(track);
-        waitForCall(host, "overlay:" + AirPlayPlugin.OVERLAY);
-
+        plugin.onArtwork(new byte[] {(byte) 0xFF, (byte) 0xD8, 1, 2}, "image/jpeg");
+        plugin.onProgress(1000, 1000 + 44100 * 10, 1000 + 44100 * 200);
+        long until = System.currentTimeMillis() + 5000;
+        while ((picked.last() == null || !picked.last().containsKey("durationMs")) && System.currentTimeMillis() < until) Thread.sleep(20);
+        TestSupport.check(Long.valueOf(200_000L).equals(picked.last().get("durationMs")) && picked.last().get("artwork") instanceof byte[], "duration and cover art sent");
+        plugin.onRemote(new DacpRemote("ABCDEF", "123"), java.net.InetAddress.getLoopbackAddress());
+        until = System.currentTimeMillis() + 5000;
+        while (((List<?>) picked.last().get("actions")).isEmpty() && System.currentTimeMillis() < until) Thread.sleep(20);
+        TestSupport.check(((List<?>) picked.last().get("actions")).contains("next"), "buttons once the sender offers a remote");
+        plugin.onAudioActive(false);
+        waitForState(picked, "paused", "Song");
         plugin.onSessionEnded();
-        waitForCall(host, "command:clearScreensaverMode");
-        waitForCall(host, "hide:" + AirPlayPlugin.OVERLAY);
+        waitForState(picked, "idle", null);
+        TestSupport.check(host.calls.contains("text:shizuku=Not running"), "Shizuku reading published");
 
-        plugin.onEvent("switch.receiver", java.util.Collections.<String, Object>singletonMap("on", false));
+        // Another player picked: the receiver stops; picked again: it comes back.
+        host.player.onDeactivate();
         waitClosed();
-        waitForCall(host, "switch:receiver=false");
-        plugin.onEvent("switch.receiver", java.util.Collections.<String, Object>singletonMap("on", true));
+        until = System.currentTimeMillis() + 5000;
+        while (!host.lastStatus.equals(AirPlayPlugin.NOT_PICKED) && System.currentTimeMillis() < until) Thread.sleep(20);
+        TestSupport.check(host.lastStatus.equals(AirPlayPlugin.NOT_PICKED), "says it is not the player");
+        picked = new FakePlayer();
+        host.player.onActivate(picked);
         waitForInfo("Kitchen");
 
         // Shizuku comes up as root: the button turns into Started, and back to Start when it goes away.
@@ -189,12 +211,13 @@ public final class PluginTest {
         copied.put("name", "Study");
         copied.put("deviceId", id); // the leader's, copied by the fleet
         plugin2.start(host2, copied);
+        host2.player.onActivate(new FakePlayer());
         Map<String, Object> info2 = waitForInfo("Study");
         TestSupport.check(a1.equals(info2.get("deviceID")), "advertises its own device ID, not the copied one: " + info2.get("deviceID"));
         TestSupport.check(!host2.saved.containsKey("deviceId"), "saves no device ID setting");
         copied.put("deviceIdOverride", "02:AA:BB:CC:DD:EE");
         plugin2.configure(copied);
-        long until = System.currentTimeMillis() + 8000;
+        until = System.currentTimeMillis() + 8000;
         while (!"02:AA:BB:CC:DD:EE".equals(waitForInfo("Study").get("deviceID")) && System.currentTimeMillis() < until) Thread.sleep(100);
         TestSupport.check("02:AA:BB:CC:DD:EE".equals(waitForInfo("Study").get("deviceID")), "override wins");
         plugin2.stop();

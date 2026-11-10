@@ -2,10 +2,10 @@
 package ks.airplay;
 
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Locale;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -14,23 +14,24 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 import ks.airplay.adb.AdbKey;
-import ks.airplay.lyrics.Lrclib;
-import ks.airplay.lyrics.Lyrics;
 import ks.airplay.adb.ShizukuStarter;
 import ks.airplay.android.AndroidPlatform;
 import ks.airplay.android.Bonjour;
-import ks.airplay.android.NowPlayingViews;
 import ks.airplay.ptp.PtpClock;
 import me.jxl.kiosk.plugins.KioskPlugin;
-import me.jxl.kiosk.plugins.OverlaySpec;
+import me.jxl.kiosk.plugins.PlayerListener;
 import me.jxl.kiosk.plugins.PluginHost;
+import me.jxl.kiosk.plugins.PluginPlayer;
 
 /**
- * AirPlay Receiver for Kiosk Satellite: makes the kiosk an AirPlay speaker for iPhone, iPad and Mac. All work
- * happens on one control thread so the KS callbacks return at once.
+ * AirPlay 2 Multi-Room for Kiosk Satellite: a Kiosk Satellite player (the player capability) that makes the kiosk
+ * an AirPlay 2 speaker. It serves only while picked under Media Player > Player: then the receiver listens,
+ * advertises itself and follows the group's PTP clock, its audio goes through Kiosk Satellite's own output and
+ * Kiosk Satellite shows what plays. All work happens on one control thread so the KS callbacks return at once.
  */
 public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener {
-    static final String OVERLAY = "now_playing_card", FULL_OVERLAY = "now_playing_full";
+    static final String PLAYER_KEY = "airplay";
+    static final String PLAYER_TITLE = "AirPlay 2";
     static final String TILE = "airplay";
 
     private PluginHost host;
@@ -39,24 +40,14 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     private Platform platform;
 
     // Owned by the worker thread.
+    private volatile PluginPlayer player;
     private AirPlayServer server;
     private AirPlayConfig config;
     private Bonjour bonjour;
-    private boolean receiverOn = true;
     private String resolvedName;
+    private boolean nameResolved;
     private volatile NowPlaying np = NowPlaying.EMPTY;
-    private final NowPlayingViews views = new NowPlayingViews(new NowPlayingViews.Source() {
-        @Override public NowPlaying nowPlaying() { return np; }
-        @Override public Lyrics lyrics() { return settings.lyrics ? lyrics : null; }
-        @Override public double position() { return lyricsPosition(); }
-        @Override public boolean controls() { return remote != null; }
-        @Override public void control(String command) { remoteControl(command); }
-    });
-
-    // Lyrics for the track playing, and the sender's remote control.
-    private volatile Lyrics lyrics;
-    private String lyricsKey = "";
-    private ScheduledFuture<?> lyricsLater;
+    private boolean sessionLive;
     private volatile DacpRemote remote;
     private volatile java.net.InetSocketAddress remoteAddress;
     private final java.util.concurrent.ExecutorService net = java.util.concurrent.Executors.newSingleThreadExecutor(new java.util.concurrent.ThreadFactory() {
@@ -66,16 +57,6 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             return t;
         }
     });
-    static final String USER_AGENT = "ks-airplay-receiver (https://github.com/ian-white83/ks-airplay-receiver)";
-    private boolean sessionLive, cardShown, modeSet, fullScreenAvailable, startedRightAway;
-    // Full-screen player overlay: shown, opened by a tap, closed by the user, card closed by back, timed window open.
-    private boolean fullShown, fullRequested, fullClosed, cardClosed, windowOpen;
-    private String codec = "";
-    private ScheduledFuture<?> hideCard, idleLater;
-    static final String SCREENSAVER_KEY = "now_playing";
-    static final String SCREENSAVER_MODE = "plugin:airplay2-multiroom:" + SCREENSAVER_KEY;
-    private static final long IDLE_SECONDS = 15;
-    private float duck = 1f;
     private PtpClock ptp;
     private boolean redirected, ptpStarting;
     private String syncState = "";
@@ -115,16 +96,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     /** Validated settings with defaults. */
     static final class Settings {
         String name = "";
-        boolean duckVoice = true;
-        int duckLevel = 20;
         double audioOffset = 0;
-        boolean lyrics = true;
-        double lyricsOffset = 0;
-        boolean wakeScreen = false;
-        String nowPlaying = "On track change";
-        String position = "Bottom";
-        String playerStyle = "Floating";
-        String fullScreen = "When the screensaver starts";
         int port = 7100;
         String deviceId = "";
         String deviceIdOverride = "";
@@ -138,16 +110,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             Settings s = new Settings();
             if (map == null) return s;
             s.name = string(map, "name", s.name).trim();
-            s.duckVoice = bool(map, "duckVoice", s.duckVoice);
-            s.duckLevel = (int) Math.round(number(map, "duckLevel", s.duckLevel));
             s.audioOffset = Math.max(-3.0, Math.min(3.0, number(map, "audioOffset", 0)));
-            s.lyrics = bool(map, "lyrics", true);
-            s.lyricsOffset = Math.max(-3.0, Math.min(3.0, number(map, "lyricsOffset", 0)));
-            s.wakeScreen = bool(map, "wakeScreen", s.wakeScreen);
-            s.nowPlaying = string(map, "nowPlaying", s.nowPlaying);
-            s.position = string(map, "position", s.position);
-            s.playerStyle = string(map, "playerStyle", s.playerStyle);
-            s.fullScreen = string(map, "fullScreen", s.fullScreen);
             try {
                 int p = Integer.parseInt(string(map, "port", "7100").trim());
                 s.port = p >= 1024 && p <= 65535 ? p : 7100;
@@ -217,19 +180,24 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         settings = Settings.from(raw);
         applyDeviceId(settings);
         publishEntities();
-        publishFullScreen();
-        try {
-            host.subscribe("voice.state");
-        } catch (RuntimeException e) {
-            log("Voice ducking unavailable: " + e.getMessage());
-        }
         ensureDeviceId(raw);
-        resolveNameAndStart();
+        resolveName();
+        try {
+            host.publishPlayer(PLAYER_KEY, PLAYER_TITLE, new Listener());
+            status(NOT_PICKED, false);
+            tile("off", "Not the selected player");
+        } catch (UnsupportedOperationException | LinkageError e) {
+            String message = "This Kiosk Satellite has no plugin players. Update Kiosk Satellite to 2026.11.14 or later.";
+            status(message, true);
+            log(message + " (" + e + ")");
+        }
         if (settings.shizukuAtBoot) {
             // Give Kiosk Satellite a moment to connect to a Shizuku that is already running.
             worker.schedule(new Runnable() { @Override public void run() { bootStart(); } }, 8, TimeUnit.SECONDS);
         }
     }
+
+    static final String NOT_PICKED = "Not the selected player. Pick it under Settings > Media Player > Player.";
 
     @Override
     public void configure(Map<String, Object> raw) {
@@ -253,19 +221,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             post(new Runnable() { @Override public void run() { keyInstalled = false; prepareBootStart(); } });
         }
         if (next.needsRestart(previous)) {
-            if (!next.name.equals(previous == null ? null : previous.name)) resolvedName = null;
-            resolveNameAndStart();
+            if (previous == null || !next.name.equals(previous.name)) nameResolved = false;
+            resolveName();
+            post(new Runnable() { @Override public void run() { if (player != null) restartReceiver(); } });
         } else {
-            post(new Runnable() { @Override public void run() {
-                applyDuck();
-                applyOffset();
-                if (fullScreenOff()) clearMode();
-                else if (np.playing) ensureMode();
-                // Style or position may have changed: build the player again.
-                hideCardNow();
-                hideFullNow();
-                refreshCard(true);
-            } });
+            post(new Runnable() { @Override public void run() { applyOffset(); } });
         }
     }
 
@@ -274,30 +234,15 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         if ("disconnect".equals(command)) {
             post(new Runnable() { @Override public void run() { if (server != null) server.disconnectActive(); } });
         } else if ("restart".equals(command)) {
-            post(new Runnable() { @Override public void run() { restartReceiver(); } });
-        } else if ("playPause".equals(command)) {
-            remoteControl(DacpRemote.PLAY_PAUSE);
-        } else if ("nextTrack".equals(command)) {
-            remoteControl(DacpRemote.NEXT);
-        } else if ("previousTrack".equals(command)) {
-            remoteControl(DacpRemote.PREVIOUS);
+            post(new Runnable() { @Override public void run() { if (player != null) restartReceiver(); } });
         }
     }
 
     @Override
     public void onEvent(String event, Map<String, Object> payload) {
-        if ("ks.voice.state".equals(event)) {
-            final Object state = payload == null ? null : payload.get("state");
-            post(new Runnable() {
-                @Override public void run() {
-                    boolean talking = state != null && !"idle".equals(state);
-                    duck = talking ? settings.duckLevel / 100f : 1f;
-                    applyDuck();
-                }
-            });
-        } else if ("shizuku.state".equals(event)) {
+        if ("shizuku.state".equals(event)) {
             post(new Runnable() { @Override public void run() {
-                if (receiverOn && server != null && ptp == null) startPtp();
+                if (server != null && ptp == null) startPtp();
                 if (starter == null) refreshShizuku(null);
                 prepareBootStart();
             } });
@@ -307,18 +252,6 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 final String run = (String) payload.get("run");
                 post(new Runnable() { @Override public void run() { startShizuku(run); } });
             }
-        } else if ("overlay.closed".equals(event)) {
-            // Back closed one of the players. KS already removed the view.
-            final Object key = payload == null ? null : payload.get("key");
-            post(new Runnable() { @Override public void run() {
-                if (FULL_OVERLAY.equals(key)) {
-                    fullShown = false;
-                    closeFullScreen();
-                } else if (OVERLAY.equals(key)) {
-                    cardShown = false;
-                    cardClosed = true;
-                }
-            } });
         } else if ("settings.cancel".equals(event)) {
             Object run = payload == null ? null : payload.get("run");
             if (run != null && run.equals(starterRun.get())) {
@@ -326,20 +259,6 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 Thread t = starter;
                 if (t != null) t.interrupt();
             }
-        } else if ("switch.receiver".equals(event)) {
-            final boolean on = payload != null && Boolean.TRUE.equals(payload.get("on"));
-            post(new Runnable() {
-                @Override public void run() {
-                    receiverOn = on;
-                    if (on) {
-                        startReceiver();
-                    } else {
-                        stopReceiver("Receiver turned off");
-                        stopPtp();
-                    }
-                    safe(new Runnable() { @Override public void run() { host.publishSwitch("receiver", "AirPlay receiver", receiverOn); } });
-                }
-            });
         }
     }
 
@@ -349,9 +268,9 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         if (w == null) return;
         w.submit(new Runnable() {
             @Override public void run() {
+                player = null;
                 stopReceiver(null);
                 stopPtp();
-                hideCardNow();
             }
         });
         w.shutdown();
@@ -360,6 +279,76 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         starterRun.set(null);
         Thread t = starter;
         if (t != null) t.interrupt();
+    }
+
+    // ---------------------------------------------------------------- the player (KS threads, then worker)
+
+    /**
+     * Kiosk Satellite's side of the player. Nothing serves until the pick arrives: a receiver that advertised while
+     * another player is picked would show on iPhones as a speaker that plays nowhere.
+     */
+    final class Listener implements PlayerListener {
+        @Override public void onActivate(final PluginPlayer p) {
+            post(new Runnable() { @Override public void run() {
+                player = p;
+                log("Picked as the player: starting the AirPlay receiver");
+                restartReceiver();
+            } });
+        }
+
+        @Override public void onDeactivate() {
+            post(new Runnable() { @Override public void run() {
+                player = null;
+                stopReceiver(null);
+                stopPtp();
+                sync("Multi-room off: not the selected player");
+                status(NOT_PICKED, false);
+                tile("off", "Not the selected player");
+                log("No longer the player: the AirPlay receiver stopped");
+            } });
+        }
+
+        @Override public void onCommand(String command, Map<String, Object> arguments) {
+            if ("play".equals(command) || "pause".equals(command)) remoteControl(DacpRemote.PLAY_PAUSE);
+            else if ("next".equals(command)) remoteControl(DacpRemote.NEXT);
+            else if ("previous".equals(command)) remoteControl(DacpRemote.PREVIOUS);
+        }
+    }
+
+    /** Tell Kiosk Satellite what plays: Now Playing, the floating player and the ESPHome media player show it. */
+    private void publishState() {
+        final PluginPlayer p = player;
+        if (p == null) return;
+        NowPlaying n = np;
+        final Map<String, Object> state = new HashMap<>();
+        state.put("state", n.playing ? "playing" : sessionLive && n.hasContent() ? "paused" : "idle");
+        if (!n.title.isEmpty()) state.put("title", clip(n.title));
+        if (!n.artist.isEmpty()) state.put("artist", clip(n.artist));
+        if (!n.album.isEmpty()) state.put("album", clip(n.album));
+        if (n.title.isEmpty() && !n.source.isEmpty()) state.put("title", clip("AirPlay from " + n.source));
+        if (n.artwork != null && n.artwork.length <= 1 << 20) state.put("artwork", n.artwork);
+        if (n.hasProgress()) {
+            state.put("durationMs", Math.round(n.durationSeconds() * 1000));
+            state.put("positionMs", Math.round(position(n) * 1000));
+        }
+        List<String> actions = new ArrayList<>();
+        if (remote != null) Collections.addAll(actions, "play", "pause", "next", "previous");
+        state.put("actions", actions);
+        safe(new Runnable() { @Override public void run() { p.update(state); } });
+    }
+
+    /** Seconds into the track that the speaker plays now: from the playout's own clock when it has one. */
+    private double position(NowPlaying n) {
+        AirPlayServer s = server;
+        long rtp = s == null ? Long.MIN_VALUE : s.playingRtp();
+        if (rtp != Long.MIN_VALUE && n.hasProgress()) {
+            return Math.max(0, Math.min(((int) (rtp - n.startRtp())) / 44100.0, n.durationSeconds()));
+        }
+        return n.elapsedSeconds(System.nanoTime());
+    }
+
+    private static String clip(String s) {
+        return s.length() > 512 ? s.substring(0, 512) : s;
     }
 
     // ---------------------------------------------------------------- receiver control (worker thread)
@@ -395,11 +384,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         }
     }
 
-    /** Use the configured name, or ask KS for this kiosk's device name, then (re)start the receiver. */
-    private void resolveNameAndStart() {
+    /** Use the configured name, or ask KS for this kiosk's device name. */
+    private void resolveName() {
         if (!settings.name.isEmpty()) {
             resolvedName = settings.name;
-            post(new Runnable() { @Override public void run() { restartReceiver(); } });
+            nameResolved = true;
             return;
         }
         try {
@@ -410,32 +399,38 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                         Object n = ((Map<?, ?>) data).get("name");
                         if (n instanceof String && !((String) n).trim().isEmpty()) name = ((String) n).trim();
                     }
-                    resolvedName = name;
-                    post(new Runnable() { @Override public void run() { restartReceiver(); } });
+                    final String resolved = name;
+                    post(new Runnable() { @Override public void run() {
+                        boolean changed = nameResolved && resolved != null && !resolved.equals(resolvedName);
+                        resolvedName = resolved;
+                        nameResolved = true;
+                        if (player != null && (server == null || changed)) restartReceiver();
+                    } });
                 }
             });
         } catch (RuntimeException e) {
             resolvedName = null;
-            post(new Runnable() { @Override public void run() { restartReceiver(); } });
+            nameResolved = true;
         }
     }
 
     private void restartReceiver() {
         stopReceiver(null);
-        if (receiverOn) startReceiver();
+        if (player != null) startReceiver();
     }
 
     private void startReceiver() {
-        if (server != null) return;
+        if (server != null || player == null) return;
         Settings s = settings;
         if (!AirPlayConfig.validDeviceId(s.deviceId)) return;
+        if (!nameResolved && s.name.isEmpty()) return; // resolveName starts it once the device name arrives
         try {
             long features = AirPlayConfig.parseFeatures(s.features, AirPlayConfig.DEFAULT_FEATURES);
-            config = new AirPlayConfig(resolvedName != null ? resolvedName : s.name, s.deviceId, s.port, features);
-            AirPlayServer next = new AirPlayServer(config, platform, this);
+            String name = resolvedName != null ? resolvedName : s.name.isEmpty() ? "Kiosk" : s.name;
+            config = new AirPlayConfig(name, s.deviceId, s.port, features);
+            AirPlayServer next = new AirPlayServer(config, new PlayerPlatform(platform, player), this);
             next.start();
             server = next;
-            applyDuck();
             applyOffset();
             if (ptp != null) next.setClock(clockFor(ptp));
         } catch (Exception e) {
@@ -451,6 +446,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             tile("", "Ready as " + config.name);
         }
         if (ptp == null) startPtp();
+        publishState();
     }
 
     // ---------------------------------------------------------------- PTP and root (worker thread)
@@ -874,25 +870,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         if (s != null) s.setOffset(Math.round(settings.audioOffset * 1_000_000_000L));
     }
 
-    private void applyDuck() {
-        AirPlayServer s = server;
-        if (s != null) s.setDuck(settings.duckVoice ? duck : 1f);
-    }
-
     private void clearPlayback() {
         boolean was = np.playing;
         np = NowPlaying.EMPTY;
         sessionLive = false;
-        startedRightAway = false;
-        codec = "";
-        cancelIdle();
-        clearMode();
-        publishPlayback();
-        hideCardNow();
-        hideFullNow();
-        fullRequested = fullClosed = cardClosed = windowOpen = false;
-        // The remote stays: senders name it once, sometimes on a separate connection that outlives the session.
-        views.refresh();
+        publishState();
         if (was) fire("playbackStopped");
     }
 
@@ -901,14 +883,13 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     @Override public void onSessionStarted(final String clientName) {
         post(new Runnable() { @Override public void run() {
             np = np.withSource(clientName);
-            safe(new Runnable() { @Override public void run() { host.publishTextSensor("source", "AirPlay source", np.source); } });
             status("Connected to " + np.source, false);
         } });
     }
 
     @Override public void onStreamStarted(final String clientName, final int ct) {
         post(new Runnable() { @Override public void run() {
-            codec = ct == 2 ? "ALAC" : ct == 4 ? "AAC" : "codec " + ct;
+            String codec = ct == 2 ? "ALAC" : ct == 4 ? "AAC" : "codec " + ct;
             status("Streaming from " + clientName + " (" + codec + ")", false);
         } });
     }
@@ -917,31 +898,15 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         post(new Runnable() { @Override public void run() {
             if (np.playing == active) return;
             np = np.withPlaying(active, System.nanoTime());
-            publishPlayback();
+            if (active) sessionLive = true;
+            publishState();
+            fire(active ? "playbackStarted" : "playbackStopped");
             if (active) {
-                sessionLive = true;
-                cancelIdle();
-                fire("playbackStarted");
-                if (settings.wakeScreen) command("stopScreensaver", null);
-                ensureMode();
-                if (!startedRightAway && settings.fullScreen.toLowerCase(Locale.ROOT).startsWith("right") && fullScreenAvailable) {
-                    startedRightAway = true;
-                    command("startScreensaver", null);
-                }
-            } else {
-                fire("playbackStopped");
-                // Pauses and gaps between tracks are short: keep the views until playback has really stopped.
-                cancelIdle();
-                idleLater = worker.schedule(new Runnable() { @Override public void run() {
-                    sessionLive = false;
-                    startedRightAway = false;
-                    clearMode();
-                    hideCardNow();
-                    hideFullNow();
-                    fullRequested = fullClosed = cardClosed = windowOpen = false;
-                } }, IDLE_SECONDS, TimeUnit.SECONDS);
+                String what = np.title.isEmpty() ? "Playing from " + np.source : "Playing " + np.title + (np.artist.isEmpty() ? "" : " by " + np.artist);
+                tile("on", what);
+            } else if (config != null) {
+                tile("", "Ready as " + config.name);
             }
-            refreshCard(false);
         } });
     }
 
@@ -955,36 +920,27 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         } });
     }
 
-    @Override public void onVolume(final double db) {
-        post(new Runnable() { @Override public void run() {
-            final double percent = AudioCurve.percent(db);
-            safe(new Runnable() { @Override public void run() { host.publishSensor("volume", "AirPlay volume", volumeMeta(), (double) Math.round(percent)); } });
-        } });
-    }
+    /** The sender's volume is applied to the audio itself (see OutputSink); Kiosk Satellite's volume comes on top. */
+    @Override public void onVolume(double db) {}
 
     @Override public void onMetadata(final Map<String, String> metadata) {
         post(new Runnable() { @Override public void run() {
-            String title = value(metadata.get("title"));
-            boolean changed = !title.equals(np.title);
-            np = np.withTrack(title, metadata.get("artist"), metadata.get("album"));
-            publishPlayback();
-            refreshCard(changed);
-            scheduleLyrics();
+            np = np.withTrack(value(metadata.get("title")), metadata.get("artist"), metadata.get("album"));
+            publishState();
         } });
     }
 
     @Override public void onArtwork(final byte[] image, String contentType) {
         post(new Runnable() { @Override public void run() {
             np = np.withArtwork(image);
-            views.refresh();
+            publishState();
         } });
     }
 
     @Override public void onProgress(final long start, final long current, final long end) {
         post(new Runnable() { @Override public void run() {
             np = np.withProgress(start, current, end, System.nanoTime());
-            views.refresh();
-            if (lyrics == null) scheduleLyrics(); // the duration helps LRCLIB pick the right version
+            publishState();
         } });
     }
 
@@ -993,63 +949,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             boolean first = remote == null || !r.dacpId.equals(remote.dacpId);
             remote = r;
             remoteAddress = null;
-            if (first) log("The sender offers remote control (DACP " + r.dacpId + " from " + sender.getHostAddress() + ")");
-            views.refresh();
+            if (first) {
+                log("The sender offers remote control (DACP " + r.dacpId + " from " + sender.getHostAddress() + ")");
+                publishState();
+            }
         } });
-    }
-
-    // ---------------------------------------------------------------- lyrics and remote control
-
-    /** Look lyrics up a moment after the track settles, once per track. */
-    private void scheduleLyrics() {
-        if (!settings.lyrics || worker == null) return;
-        final NowPlaying n = np;
-        final String key = n.title + "\n" + n.artist + "\n" + n.album;
-        if (n.title.isEmpty() || n.artist.isEmpty()) return;
-        if (!key.equals(lyricsKey)) {
-            lyrics = null;
-            views.refresh();
-        } else if (lyrics != null) {
-            return;
-        }
-        lyricsKey = key;
-        if (lyricsLater != null) lyricsLater.cancel(false);
-        lyricsLater = worker.schedule(new Runnable() { @Override public void run() {
-            lyricsLater = null;
-            final NowPlaying now = np;
-            if (!key.equals(lyricsKey)) return;
-            final double duration = now.durationSeconds();
-            net.execute(new Runnable() { @Override public void run() {
-                Lyrics found = null;
-                try {
-                    found = new Lrclib(USER_AGENT).find(now.title, now.artist, now.album, duration);
-                } catch (Exception e) {
-                    log("Lyrics lookup failed: " + e.getMessage());
-                }
-                final Lyrics result = found;
-                post(new Runnable() { @Override public void run() {
-                    if (!key.equals(lyricsKey)) return;
-                    lyrics = result;
-                    log(result == null ? "No lyrics on LRCLIB for " + now.title
-                            : (result.synced ? "Synced" : result.instrumental ? "Instrumental" : "Plain") + " lyrics found for " + now.title);
-                    views.refresh();
-                } });
-            } });
-        } }, 1500, TimeUnit.MILLISECONDS);
-    }
-
-    /** Seconds into the track that the speaker plays right now, with the lyrics timing nudge. */
-    private double lyricsPosition() {
-        NowPlaying n = np;
-        double at;
-        AirPlayServer s = server;
-        long rtp = s == null ? Long.MIN_VALUE : s.playingRtp();
-        if (rtp != Long.MIN_VALUE && n.hasProgress()) {
-            at = Math.max(0, Math.min(((int) (rtp - n.startRtp())) / 44100.0, n.durationSeconds()));
-        } else {
-            at = n.elapsedSeconds(System.nanoTime());
-        }
-        return at + settings.lyricsOffset;
     }
 
     /** Play/pause or skip on the sender, over DACP. Runs on the network thread. */
@@ -1079,209 +983,13 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         } });
     }
 
-    // ---------------------------------------------------------------- full-screen view (worker thread)
-
-    /** Register the full-screen Now Playing view as a plugin screensaver, once per session. */
-    private void publishFullScreen() {
-        if (isHeadless()) return;
-        try {
-            host.publishScreensaverView(SCREENSAVER_KEY, "AirPlay Now Playing", views.fullScreen(new Runnable() {
-                @Override public void run() {
-                    post(new Runnable() { @Override public void run() { refreshCard(false); } });
-                }
-            }));
-            fullScreenAvailable = true;
-        } catch (UnsupportedOperationException | LinkageError e) {
-            fullScreenAvailable = false;
-            log("Full-screen Now Playing needs a newer Kiosk Satellite: " + e.getMessage());
-        } catch (RuntimeException e) {
-            fullScreenAvailable = false;
-            log("Full-screen Now Playing unavailable: " + e.getMessage());
-        }
-    }
-
-    private boolean fullScreenOff() {
-        return settings.fullScreen.toLowerCase(Locale.ROOT).startsWith("off");
-    }
-
-    /** Make the full-screen view the screensaver while AirPlay plays. KS still decides when it starts. */
-    private void ensureMode() {
-        if (modeSet || !fullScreenAvailable || fullScreenOff()) return;
-        modeSet = true;
-        command("setScreensaverMode", Collections.<String, Object>singletonMap("mode", SCREENSAVER_MODE));
-    }
-
-    private void clearMode() {
-        if (!modeSet) return;
-        modeSet = false;
-        command("clearScreensaverMode", null);
-    }
-
-    /** The floating player's full-screen button: open the full-screen player over the dashboard. */
-    private void openFullScreen() {
-        fullRequested = true;
-        fullClosed = false;
-        refreshCard(false);
-    }
-
-    /** The full-screen player's minimise button, or back: return to the floating player. */
-    private void closeFullScreen() {
-        fullRequested = false;
-        fullClosed = true;
-        cardClosed = false;
-        hideFullNow();
-        refreshCard(false);
-    }
-
-    private void cancelIdle() {
-        if (idleLater != null) {
-            idleLater.cancel(false);
-            idleLater = null;
-        }
-    }
-
-    private void command(final String name, Map<String, Object> args) {
-        final Map<String, Object> arguments = args == null ? Collections.<String, Object>emptyMap() : args;
-        safe(new Runnable() { @Override public void run() {
-            host.executeCommand(name, arguments, new PluginHost.CommandCallback() {
-                @Override public void onResult(boolean ok, Object data, String error) { if (!ok) log(name + ": " + error); }
-            });
-        } });
-    }
-
     // ---------------------------------------------------------------- Kiosk Satellite output
 
     private void publishEntities() {
         safe(new Runnable() { @Override public void run() {
-            host.publishBinarySensor("playing", "AirPlay playing", "running", false);
-            host.publishTextSensor("track", "AirPlay track", "");
-            host.publishTextSensor("artist", "AirPlay artist", "");
-            host.publishTextSensor("album", "AirPlay album", "");
-            host.publishTextSensor("source", "AirPlay source", "");
-            host.publishSensor("volume", "AirPlay volume", volumeMeta(), null);
-            host.publishSwitch("receiver", "AirPlay receiver", true);
-            host.publishTextSensor("sync", "AirPlay multi-room", "Starting");
+            host.publishTextSensor("sync", "AirPlay multi-room", "Off: not the selected player");
         } });
         post(new Runnable() { @Override public void run() { refreshShizuku(null); } });
-    }
-
-    private static Map<String, Object> volumeMeta() {
-        Map<String, Object> meta = new LinkedHashMap<>();
-        meta.put("unit", "%");
-        meta.put("stateClass", "measurement");
-        meta.put("accuracyDecimals", 0);
-        return meta;
-    }
-
-    private void publishPlayback() {
-        final NowPlaying n = np;
-        safe(new Runnable() { @Override public void run() {
-            host.publishBinarySensor("playing", "AirPlay playing", "running", n.playing);
-            host.publishTextSensor("track", "AirPlay track", n.title);
-            host.publishTextSensor("artist", "AirPlay artist", n.artist);
-            host.publishTextSensor("album", "AirPlay album", n.album);
-            host.publishTextSensor("source", "AirPlay source", n.source);
-        } });
-        if (n.playing) {
-            String what = n.title.isEmpty() ? "Playing from " + n.source : "Playing " + n.title + (n.artist.isEmpty() ? "" : " by " + n.artist);
-            tile("on", what);
-        }
-    }
-
-    private boolean fullStyle() {
-        return settings.playerStyle.toLowerCase(Locale.ROOT).startsWith("full");
-    }
-
-    /**
-     * Show, keep or hide the player. "While playing" keeps it up while a session plays (or briefly pauses), "On
-     * track change" for a few seconds after each new track. The style picks the floating card or the full-screen
-     * player; the card's button opens full screen and the full-screen player's button goes back to the card.
-     * Neither needs the screensaver: both are overlays over the dashboard.
-     */
-    private void refreshCard(boolean trackChanged) {
-        views.refresh();
-        if (host == null || isHeadless()) return;
-        String mode = settings.nowPlaying.toLowerCase(Locale.ROOT);
-        boolean live = sessionLive && np.hasContent();
-        if (mode.startsWith("off") || !live) {
-            hideCardNow();
-            hideFullNow();
-            return;
-        }
-        boolean timed = mode.startsWith("on");
-        if (trackChanged || !timed) {
-            cardClosed = false;
-            if (trackChanged && timed) fullClosed = false;
-        }
-        if (timed && (trackChanged || !windowOpen && np.playing && hideCard == null && !cardShown && !fullShown)) {
-            windowOpen = true;
-            if (hideCard != null) hideCard.cancel(false);
-            hideCard = worker.schedule(new Runnable() { @Override public void run() {
-                hideCard = null;
-                windowOpen = false;
-                refreshCard(false);
-            } }, 8, TimeUnit.SECONDS);
-        }
-        boolean window = !timed || windowOpen;
-        boolean full = fullRequested || fullStyle() && !fullClosed && window;
-        boolean card = !full && !cardClosed && window;
-        if (full) {
-            if (!fullShown) showFull();
-        } else {
-            hideFullNow();
-        }
-        if (card) {
-            if (!cardShown) showCard();
-        } else {
-            hideCardNow();
-        }
-    }
-
-    private void showCard() {
-        cardShown = true;
-        final String anchor = settings.position.toLowerCase(Locale.ROOT).startsWith("top") ? OverlaySpec.TOP : OverlaySpec.BOTTOM;
-        final me.jxl.kiosk.plugins.OverlayFactory floating = views.floating(new NowPlayingViews.Tap() {
-            @Override public void onTap() {
-                post(new Runnable() { @Override public void run() { openFullScreen(); } });
-            }
-        });
-        safe(new Runnable() { @Override public void run() {
-            host.showOverlay(OVERLAY, OverlaySpec.at(anchor).inset(24).enter(OverlaySpec.SLIDE).exit(OverlaySpec.SLIDE).touchable(true), floating);
-        } });
-    }
-
-    private void hideCardNow() {
-        if (!cardShown) return;
-        cardShown = false;
-        if (host == null || isHeadless()) return;
-        safe(new Runnable() { @Override public void run() { host.hideOverlay(OVERLAY); } });
-    }
-
-    private void showFull() {
-        fullShown = true;
-        final me.jxl.kiosk.plugins.OverlayFactory full = views.fullScreenPlayer(new NowPlayingViews.Tap() {
-            @Override public void onTap() {
-                post(new Runnable() { @Override public void run() { closeFullScreen(); } });
-            }
-        });
-        safe(new Runnable() { @Override public void run() {
-            host.showOverlay(FULL_OVERLAY, OverlaySpec.fullScreen().enter(OverlaySpec.FADE).exit(OverlaySpec.FADE).touchable(true), full);
-        } });
-    }
-
-    private void hideFullNow() {
-        if (!fullShown) return;
-        fullShown = false;
-        if (host == null || isHeadless()) return;
-        safe(new Runnable() { @Override public void run() { host.hideOverlay(FULL_OVERLAY); } });
-    }
-
-    private boolean isHeadless() {
-        try {
-            return host.isHeadless();
-        } catch (RuntimeException e) {
-            return false;
-        }
     }
 
     private void fire(final String trigger) {

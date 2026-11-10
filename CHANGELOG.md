@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0
+
+The plugin is now a Kiosk Satellite player. Needs Kiosk Satellite 2026.11.14 or later.
+
+- **Pick it under Settings > Media Player > Player** as **AirPlay 2**. It advertises and plays only while picked, so the kiosk no longer shows up twice in the AirPlay menu and there's nothing to turn off.
+- Audio goes through Kiosk Satellite's own output, so Kiosk Satellite's Now Playing view, floating player, lyrics, media volume, assistant ducking and echo cancellation all work with AirPlay. Sync uses that output's playback timestamps.
+- Track details, cover art, position and state reach Home Assistant through Kiosk Satellite's media player entity.
+- Removed, because Kiosk Satellite now does them: the plugin's own floating and full-screen players, the screensaver view, lyrics, **Lower AirPlay while the assistant talks**, **Wake the screen when playback starts**, the playback text sensors, the **AirPlay receiver** switch and the play/pause and skip actions. Set these up in Kiosk Satellite's Media Player settings instead.
+- The plugin no longer contacts any internet server.
+
 ## 0.6.6
 
 - Fix: playing to kiosks first and then adding a first-generation HomePod still put them out of sync. The HomePod sends timing under the iPhone's clock ID but with its own time, days away, and the plugin mixed those readings with the iPhone's. Clocks are now kept apart per sender, and when two senders use one ID, the one whose time fits the audio's anchor is followed. The log names the sender.

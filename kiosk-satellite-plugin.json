@@ -2,23 +2,20 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "0.6.6",
+  "version": "0.7.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
-  "minAppVersion": "2026.10.45",
+  "minAppVersion": "2026.11.14",
   "entryClass": "ks.airplay.AirPlayPlugin",
-  "description": "Turns the kiosk into an AirPlay 2 speaker that groups with HomePods and other AirPlay 2 speakers for multi-room audio from an iPhone, iPad or Mac. Follows the sender's clock over PTP, which needs Shizuku running as root. Shows track info and cover art, publishes playback to Home Assistant and lowers audio while the voice assistant talks. Audio only. Not affiliated with Apple.",
+  "description": "Adds an AirPlay 2 player to Kiosk Satellite's Media Player, so the kiosk groups with HomePods and other AirPlay 2 speakers for multi-room audio from an iPhone, iPad or Mac. Pick it under Settings > Media Player > Player. Follows the sender's clock over PTP, which needs Shizuku running as root, and plays through Kiosk Satellite's own output, so Now Playing, lyrics, ducking and the echo canceller all work. Audio only. Not affiliated with Apple.",
   "author": "Ian White",
   "license": "GPL-3.0-or-later",
   "headless": true,
   "capabilities": [
-    "overlay",
+    "player",
     "entities",
     "host.read",
-    "host.control",
-    "shizuku",
-    "screensaver",
-    "screensaver.mode"
+    "shizuku"
   ],
   "icon": "icon.png",
   "settings": [
@@ -41,118 +38,6 @@
       "unit": "s",
       "group": "Playback",
       "description": "Shift AirPlay audio later (positive) or earlier (negative) to line it up with video or other speakers. Applies straight away."
-    },
-    {
-      "key": "duckVoice",
-      "type": "boolean",
-      "title": "Lower AirPlay while the assistant talks",
-      "default": true,
-      "group": "Playback",
-      "description": "Turn AirPlay audio down while Voice Satellite listens and answers."
-    },
-    {
-      "key": "duckLevel",
-      "type": "number",
-      "title": "Lowered volume",
-      "default": 20,
-      "min": 0,
-      "max": 100,
-      "step": 5,
-      "unit": "%",
-      "group": "Playback",
-      "visibleWhen": {
-        "key": "duckVoice",
-        "equals": true
-      }
-    },
-    {
-      "key": "wakeScreen",
-      "type": "boolean",
-      "title": "Wake the screen when playback starts",
-      "default": false,
-      "group": "Playback",
-      "description": "Dismiss the screensaver and turn the display on when AirPlay audio starts."
-    },
-    {
-      "key": "nowPlaying",
-      "type": "select",
-      "title": "Show the player",
-      "default": "While playing",
-      "options": [
-        "Off",
-        "On track change",
-        "While playing"
-      ],
-      "group": "Now Playing",
-      "description": "When the Now Playing player shows over the dashboard: for a few seconds when a track starts, or for as long as AirPlay plays. It doesn't need the screensaver."
-    },
-    {
-      "key": "playerStyle",
-      "type": "select",
-      "title": "Player style",
-      "default": "Floating",
-      "options": [
-        "Floating",
-        "Full screen"
-      ],
-      "group": "Now Playing",
-      "visibleWhen": {
-        "key": "nowPlaying",
-        "notEquals": "Off"
-      },
-      "description": "Floating: a card with the track, artist, cover art and progress, with a button that opens the full-screen player. Full screen: large cover art and track details over the whole dashboard, with a button that shrinks it to the floating card. Back does the same."
-    },
-    {
-      "key": "position",
-      "type": "select",
-      "title": "Floating player position",
-      "default": "Bottom",
-      "options": [
-        "Bottom",
-        "Top"
-      ],
-      "group": "Now Playing",
-      "visibleWhen": {
-        "key": "playerStyle",
-        "equals": "Floating"
-      }
-    },
-    {
-      "key": "fullScreen",
-      "type": "select",
-      "title": "In the screensaver",
-      "default": "When the screensaver starts",
-      "options": [
-        "Off",
-        "When the screensaver starts",
-        "Right away"
-      ],
-      "group": "Now Playing",
-      "description": "Shows the full-screen view in place of the screensaver while AirPlay plays, like Kiosk Satellite's own Now Playing. Needs the screensaver turned on in Kiosk Satellite. \"Right away\" also starts the screensaver as soon as playback starts."
-    },
-    {
-      "key": "lyrics",
-      "type": "boolean",
-      "title": "Lyrics",
-      "default": true,
-      "group": "Now Playing",
-      "description": "Adds a lyrics button to the full-screen player, with lyrics in time with the music. They come from LRCLIB (lrclib.net), the same free database Kiosk Satellite's own Now Playing uses: the plugin sends it the track's title, artist, album and length. Off, nothing is looked up."
-    },
-    {
-      "key": "lyricsOffset",
-      "type": "number",
-      "title": "Lyrics timing",
-      "default": 0,
-      "min": -3,
-      "max": 3,
-      "step": 0.1,
-      "unit": "s",
-      "group": "Now Playing",
-      "visibleWhen": {
-        "key": "lyrics",
-        "equals": true
-      },
-      "description": "Moves the lyrics against the music. Positive values show each line earlier."
     },
     {
       "key": "shizukuAtBoot",
@@ -219,18 +104,6 @@
     {
       "id": "restart",
       "title": "Restart AirPlay receiver"
-    },
-    {
-      "id": "playPause",
-      "title": "Play or pause AirPlay"
-    },
-    {
-      "id": "nextTrack",
-      "title": "Next AirPlay track"
-    },
-    {
-      "id": "previousTrack",
-      "title": "Previous AirPlay track"
     }
   ],
   "triggers": [
@@ -253,7 +126,7 @@
     },
     {
       "title": "Receiver",
-      "readingsTitle": "Now playing",
+      "readingsTitle": "Status",
       "readings": [
         "*"
       ]
