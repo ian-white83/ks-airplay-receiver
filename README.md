@@ -194,7 +194,8 @@ The **Shizuku** status under the button shows whether Shizuku is running as root
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Audio offset | 0 s | Shifts AirPlay audio later (positive) or earlier (negative), from −3 to +3 seconds, to line it up with video or other speakers. Changes apply straight away |
+| Audio offset | 0 s | Shifts AirPlay audio later (positive) or earlier (negative), from −3 to +3 seconds in steps of 0.01 s, to line it up with video or other speakers. Type the value, or use the buttons below it. Changes apply straight away |
+| Nudge audio earlier / later | buttons | **− 0.01 s** and **+ 0.01 s** move the audio offset one step at a time, for fine tuning by ear while music plays |
 
 Now Playing, lyrics, the floating player, the screensaver view, assistant ducking and waking the screen are Kiosk Satellite's own Media Player settings, under **Settings > Media Player**. They apply to AirPlay like any other player.
 

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
   "minAppVersion": "2026.11.14",
@@ -34,10 +34,11 @@
       "default": 0,
       "min": -3,
       "max": 3,
-      "step": 0.05,
+      "step": 0.01,
       "unit": "s",
       "group": "Playback",
-      "description": "Shift AirPlay audio later (positive) or earlier (negative) to line it up with video or other speakers. Applies straight away."
+      "description": "Shift AirPlay audio later (positive) or earlier (negative), from -3 to +3 seconds in steps of 0.01 s, to line it up with video or other speakers. Type a value, or nudge it with the buttons below. Applies straight away.",
+      "input": "field"
     },
     {
       "key": "shizukuAtBoot",
@@ -125,6 +126,20 @@
     }
   ],
   "buttons": [
+    {
+      "id": "offsetEarlier",
+      "title": "Nudge audio earlier",
+      "label": "− 0.01 s",
+      "group": "Playback",
+      "description": "Moves AirPlay audio 0.01 seconds earlier."
+    },
+    {
+      "id": "offsetLater",
+      "title": "Nudge audio later",
+      "label": "+ 0.01 s",
+      "group": "Playback",
+      "description": "Moves AirPlay audio 0.01 seconds later."
+    },
     {
       "id": "startShizuku",
       "title": "Start Shizuku now",

@@ -40,6 +40,8 @@ public final class PluginTest {
         }
         @Override public void subscribe(String event) { calls.add("subscribe:" + event); }
         @Override public void updateSettings(Map<String, Object> values) { saved.putAll(values); calls.add("updateSettings"); }
+        final List<String> results = new java.util.concurrent.CopyOnWriteArrayList<>();
+        @Override public boolean setupResult(String run, String state, String message) { results.add(run + ":" + state + ":" + message); return true; }
         @Override public InputStream openAsset(String name) throws java.io.IOException {
             return new FileInputStream(TestSupport.root().resolve("assets").resolve(name).toFile());
         }
@@ -145,6 +147,19 @@ public final class PluginTest {
         settings.put("name", "Kitchen");
         plugin.configure(settings);
         waitForInfo("Kitchen");
+
+        // The nudge buttons move the audio offset 0.01 s at a time, saved and applied at once.
+        for (String b : new String[] {"offsetLater", "offsetLater", "offsetLater", "offsetEarlier"}) {
+            Map<String, Object> press = new HashMap<>();
+            press.put("id", b);
+            press.put("run", "run-" + b + host.results.size());
+            plugin.onEvent("settings.button", press);
+        }
+        waitFor(() -> host.results.size() == 4, "four nudges answered");
+        TestSupport.check(Double.valueOf(0.02).equals(host.saved.get("audioOffset")), "offset nudged to 0.02: " + host.saved.get("audioOffset"));
+        TestSupport.check(host.results.get(3).endsWith("success:Audio offset +0.02 s"), "says the new offset: " + host.results.get(3));
+        settings.put("audioOffset", 0.02);
+        plugin.configure(settings);
         plugin.execute("restart", new HashMap<String, Object>());
         waitForInfo("Kitchen");
 

@@ -60,6 +60,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
 
     // Starting Shizuku through this device's own adbd.
     static final String START_BUTTON = "startShizuku", CHECK_BUTTON = "checkShizuku";
+    static final String OFFSET_EARLIER = "offsetEarlier", OFFSET_LATER = "offsetLater";
     private final java.util.concurrent.atomic.AtomicReference<String> starterRun = new java.util.concurrent.atomic.AtomicReference<>();
     private volatile Thread starter;
     private AdbKey adbKey;
@@ -252,7 +253,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             } });
         } else if ("settings.button".equals(event)) {
             Object id = payload == null ? null : payload.get("id");
-            if ((START_BUTTON.equals(id) || CHECK_BUTTON.equals(id)) && payload.get("run") instanceof String) {
+            if ((OFFSET_EARLIER.equals(id) || OFFSET_LATER.equals(id)) && payload.get("run") instanceof String) {
+                final String run = (String) payload.get("run");
+                final double delta = OFFSET_LATER.equals(id) ? 0.01 : -0.01;
+                post(new Runnable() { @Override public void run() { nudgeOffset(run, delta); } });
+            } else if ((START_BUTTON.equals(id) || CHECK_BUTTON.equals(id)) && payload.get("run") instanceof String) {
                 final String run = (String) payload.get("run");
                 post(new Runnable() { @Override public void run() { startShizuku(run); } });
             }
@@ -910,6 +915,22 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         if (why != null) {
             status(why, false);
             tile("off", why);
+        }
+    }
+
+    /** The nudge buttons: move the audio offset by one step, save it and apply it at once. */
+    private void nudgeOffset(String run, double delta) {
+        double next = Math.round((settings.audioOffset + delta) * 100) / 100.0;
+        next = Math.max(-3.0, Math.min(3.0, next));
+        settings.audioOffset = next;
+        applyOffset();
+        final double value = next;
+        String shown = String.format(java.util.Locale.ROOT, "%+.2f s", value).replace("+0.00", "0.00").replace("-0.00", "0.00");
+        try {
+            host.updateSettings(Collections.<String, Object>singletonMap("audioOffset", value));
+            setup(run, "success", "Audio offset " + shown + (Math.abs(value) >= 3.0 ? " (the limit)" : ""));
+        } catch (RuntimeException | LinkageError e) {
+            setup(run, "error", "Applied " + shown + " for now, but could not save it: " + e.getMessage());
         }
     }
 

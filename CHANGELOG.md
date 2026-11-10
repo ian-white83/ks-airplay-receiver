@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0
+
+- **Audio offset** is easier to set exactly: it now takes a typed value in steps of 0.01 s instead of a slider, and new **− 0.01 s** and **+ 0.01 s** buttons under it nudge it one step at a time while you listen. Each nudge applies and saves at once. Older Kiosk Satellite versions still show a slider, now in 0.01 s steps.
+
 ## 1.0.1
 
 - Fix: Echos stuttered and kept dropping out after a first-generation HomePod joined the group, until the kiosk restarted. When the HomePod joins, the iPhone steps its clock by days but keeps playing on the anchor it gave before, so the plugin gave up on sync. It now keeps following the clock in the anchor's time base.
