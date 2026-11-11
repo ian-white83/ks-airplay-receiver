@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package ks.airplay;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -42,12 +40,27 @@ public final class DacpRemote {
                     + "Connection: close\r\n\r\n";
             out.write(req.getBytes(Util.UTF8));
             out.flush();
-            String status = new BufferedReader(new InputStreamReader(s.getInputStream(), Util.UTF8)).readLine();
-            if (status == null) throw new IOException("No answer from the sender's remote");
+            String status = statusLine(s.getInputStream());
             String[] parts = status.split(" ");
             if (parts.length < 2) throw new IOException("Bad answer: " + status);
             if (!parts[1].matches("\\d{3}")) throw new IOException("Bad answer: " + status);
             return Integer.parseInt(parts[1]);
         }
+    }
+
+    /** The first line of the answer, at most 256 bytes: a remote that sends more is not one. */
+    static String statusLine(java.io.InputStream in) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        while (true) {
+            int b = in.read();
+            if (b < 0) {
+                if (sb.length() == 0) throw new IOException("No answer from the sender's remote");
+                break;
+            }
+            if (b == '\n') break;
+            if (b != '\r') sb.append((char) b);
+            if (sb.length() > 256) throw new IOException("The sender's remote sent an overlong status line");
+        }
+        return sb.toString();
     }
 }

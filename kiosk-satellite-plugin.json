@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "airplay2-multiroom",
   "name": "AirPlay 2 Multi-Room",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "apiVersion": 1,
   "minAndroidSdk": 24,
-  "minAppVersion": "2026.11.14",
+  "minAppVersion": "2026.11.16",
   "entryClass": "ks.airplay.AirPlayPlugin",
   "description": "Adds an AirPlay 2 player to Kiosk Satellite's Media Player, so the kiosk groups with HomePods and other AirPlay 2 speakers for multi-room audio from an iPhone, iPad or Mac. Pick it under Settings > Media Player > Player. Follows the sender's clock over PTP, which needs Shizuku running as root, and plays through Kiosk Satellite's own output, so Now Playing, lyrics, ducking and the echo canceller all work. Audio only. Not affiliated with Apple.",
   "author": "Ian White",
@@ -78,7 +78,11 @@
       "title": "Shizuku is running as root",
       "default": false,
       "group": "Advanced",
-      "description": "Set by the plugin to switch the Shizuku button between Start and Started. Changing it here has no effect."
+      "description": "Set by the plugin to switch the Shizuku button between Start and Started. Changing it here has no effect.",
+      "visibleWhen": {
+        "key": "shizukuAtBoot",
+        "equals": true
+      }
     },
     {
       "key": "adbKey",
@@ -149,7 +153,7 @@
         "key": "shizukuRunning",
         "equals": false
       },
-      "description": "Starts Shizuku as root through this device's ADB, the same way the boot start does. The first time, approve the \"Allow USB debugging?\" prompt on the kiosk screen with Always allow."
+      "description": "Starts Shizuku as root through this device's ADB, as the boot start does, then switches ADB back from root. Shown while the boot start is on. The first time, approve \"Allow USB debugging?\" on the kiosk screen with Always allow."
     },
     {
       "id": "checkShizuku",
@@ -160,7 +164,7 @@
         "key": "shizukuRunning",
         "equals": true
       },
-      "description": "Shizuku runs as root. Tap to check that the boot start can still reach ADB as root."
+      "description": "Shizuku runs as root. Tap to check that the boot start can still reach ADB."
     }
   ]
 }

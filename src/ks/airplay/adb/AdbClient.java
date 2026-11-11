@@ -123,6 +123,11 @@ public final class AdbClient implements Closeable {
         return service("root:", 10000);
     }
 
+    /** Switch adbd back to running as shell. Like root:, adbd restarts and this connection ends. */
+    public String unroot() throws IOException {
+        return service("unroot:", 10000);
+    }
+
     private String service(String name, int timeoutMs) throws IOException {
         int local = nextLocalId++;
         int remote = 0;

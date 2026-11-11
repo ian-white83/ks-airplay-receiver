@@ -136,6 +136,10 @@ public final class AdbTest {
                         root = true;
                         return; // adbd restarts
                     }
+                } else if (service.equals("unroot:")) {
+                    send(out, AdbClient.WRTE, id, local, "restarting adbd as non root\n".getBytes("UTF-8"));
+                    root = false;
+                    return; // adbd restarts
                 } else if (service.equals("shell:id -u")) {
                     reply = root ? "0\n" : "2000\n";
                 } else {
@@ -230,6 +234,13 @@ public final class AdbTest {
         adbd.commands.clear();
         new ShizukuStarter(key, "127.0.0.1", port).run(false, 5000, 5000, progress);
         check(adbd.prompts == 1, "no second prompt");
+
+        // Once Shizuku is up, ADB goes back to non-root.
+        check(adbd.root, "root after the start");
+        new ShizukuStarter(key, "127.0.0.1", port).unroot(5000, 5000, progress);
+        check(!adbd.root, "unroot: switches adbd back");
+        check(new ShizukuStarter(key, "127.0.0.1", port).unroot(5000, 5000, progress).contains("already"), "unroot when not root changes nothing");
+        new ShizukuStarter(key, "127.0.0.1", port).run(true, 5000, 5000, progress);
 
         // Already root, check only.
         adbd.commands.clear();

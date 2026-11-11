@@ -187,7 +187,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
             status(NOT_PICKED, false);
             tile("off", "Not the selected player");
         } catch (UnsupportedOperationException | LinkageError e) {
-            String message = "This Kiosk Satellite has no plugin players. Update Kiosk Satellite to 2026.11.14 or later.";
+            String message = "This Kiosk Satellite has no plugin players. Update Kiosk Satellite to 2026.11.16 or later.";
             status(message, true);
             log(message + " (" + e + ")");
         }
@@ -257,6 +257,10 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                 final String run = (String) payload.get("run");
                 final double delta = OFFSET_LATER.equals(id) ? 0.01 : -0.01;
                 post(new Runnable() { @Override public void run() { nudgeOffset(run, delta); } });
+            } else if ((START_BUTTON.equals(id) || CHECK_BUTTON.equals(id)) && payload.get("run") instanceof String && !settings.shizukuAtBoot) {
+                // The button uses the boot start's ADB key, so it only works while the boot start is on: turning that
+                // off is how the key is revoked.
+                setup((String) payload.get("run"), "error", "Turn on Start Shizuku as root at boot first. The button uses the same ADB access, and turning the option off removes it.");
             } else if ((START_BUTTON.equals(id) || CHECK_BUTTON.equals(id)) && payload.get("run") instanceof String) {
                 final String run = (String) payload.get("run");
                 post(new Runnable() { @Override public void run() { startShizuku(run); } });
@@ -747,6 +751,7 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
         if (dir != null) {
             java.io.File f = new java.io.File(dir, KEY_FILE);
             if (f.isFile() && !f.delete()) log("Could not delete the ADB key file " + f);
+            new java.io.File(dir, UNROOT_STOPS_SHIZUKU).delete();
         }
         clearOldKeySetting();
         if (!rootReady(shizukuStateOrNull())) {
@@ -781,6 +786,73 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
     /** The settings button: start Shizuku, or just check the ADB path when it already runs as root. */
     private void startShizuku(String run) {
         launchStarter(run, rootReady(shizukuStateOrNull()));
+    }
+
+    static final String UNROOT_STOPS_SHIZUKU = "unroot-stops-shizuku";
+
+    /**
+     * Once Shizuku runs as root on its own, switch adbd back from root, so ADB on the network no longer leads
+     * straight to a root shell. On a device where that also stops Shizuku, start it again, remember it, and leave adbd
+     * as root from then on. Runs on the starter thread; returns a line for the button.
+     */
+    private String settleAdb(AdbKey key, final String run, boolean justStarted) {
+        java.io.File dir = platform.dataDir();
+        final java.io.File flag = dir == null ? null : new java.io.File(dir, UNROOT_STOPS_SHIZUKU);
+        if (flag != null && flag.isFile()) return "ADB stays root: on this device that keeps Shizuku running.";
+        if (!waitForRoot(justStarted ? 30000 : 3000)) return "";
+        ShizukuStarter.Progress quiet = new ShizukuStarter.Progress() {
+            @Override public boolean report(String message) {
+                if (Thread.currentThread().isInterrupted()) return false;
+                if (message != null && run != null && run.equals(starterRun.get())) setup(run, "running", message);
+                return true;
+            }
+        };
+        try {
+            new ShizukuStarter(key).unroot(10000, 10000, quiet);
+        } catch (Exception e) {
+            log("Could not switch ADB back from root: " + e.getMessage());
+            return "";
+        }
+        try {
+            Thread.sleep(8000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "";
+        }
+        if (rootReady(shizukuStateOrNull())) {
+            log("Switched ADB back from root. Shizuku keeps running as root.");
+            return "ADB is back to non-root.";
+        }
+        // Shizuku went down with adbd's restart: start it again and keep adbd as root on this device.
+        log("Switching ADB back from root stopped Shizuku on this device. Starting it again, and leaving ADB as root from now on.");
+        try {
+            java.io.File parent = flag == null ? null : flag.getParentFile();
+            if (parent != null && !parent.isDirectory()) parent.mkdirs();
+            if (flag != null) new java.io.FileOutputStream(flag).close();
+        } catch (java.io.IOException e) {
+            log("Could not save that: " + e.getMessage());
+        }
+        try {
+            new ShizukuStarter(key).run(false, 20000, 20000, quiet);
+        } catch (Exception e) {
+            log("Could not start Shizuku again: " + e.getMessage());
+        }
+        post(new Runnable() { @Override public void run() { refreshShizuku(null); } });
+        return "ADB stays root: on this device switching it back stops Shizuku.";
+    }
+
+    private boolean waitForRoot(long ms) {
+        long end = System.currentTimeMillis() + ms;
+        while (true) {
+            if (rootReady(shizukuStateOrNull())) return true;
+            if (System.currentTimeMillis() > end) return false;
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
     }
 
     private void launchStarter(final String run, final boolean alreadyRunning) {
@@ -850,9 +922,11 @@ public final class AirPlayPlugin implements KioskPlugin, AirPlayServer.Listener 
                     if (run == null) post(new Runnable() { @Override public void run() { sync("Multi-room off: " + err); } });
                 } else if (alreadyRunning) {
                     message = "Shizuku already runs as root, and the boot start can reach ADB as root.";
+                    message += " " + settleAdb(key, run, false);
                 } else {
                     message = "Shizuku started. Multi-room turns on once Kiosk Satellite connects to it.";
                     log(message);
+                    message += " " + settleAdb(key, run, true);
                 }
                 if (run != null && run.equals(starterRun.get())) setup(run, err == null ? "success" : "error", message);
                 starterRun.compareAndSet(run, null);

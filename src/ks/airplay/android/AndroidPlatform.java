@@ -94,9 +94,27 @@ public final class AndroidPlatform implements Platform {
     }
 
     /** Kiosk Satellite's no-backup files folder, so the ADB key never leaves the device in a backup. */
+    /**
+     * The plugin's own data folder, which Kiosk Satellite deletes when the plugin is uninstalled. Version 1.0 to
+     * 1.1 kept files in a folder of their own under no_backup instead: they move here once.
+     */
     @Override public java.io.File dataDir() {
         try {
-            return new java.io.File(Bonjour.applicationContext().getNoBackupFilesDir(), "plugin-airplay2-multiroom");
+            android.content.Context context = Bonjour.applicationContext();
+            java.io.File dir = new java.io.File(new java.io.File(new java.io.File(context.getFilesDir(), "plugin-data"), "airplay2-multiroom"), "private");
+            java.io.File old = new java.io.File(context.getNoBackupFilesDir(), "plugin-airplay2-multiroom");
+            if (old.isDirectory()) {
+                if (!dir.isDirectory()) dir.mkdirs();
+                java.io.File[] files = old.listFiles();
+                if (files != null) {
+                    for (java.io.File f : files) {
+                        java.io.File target = new java.io.File(dir, f.getName());
+                        if (target.exists() || !f.renameTo(target)) f.delete();
+                    }
+                }
+                old.delete();
+            }
+            return dir;
         } catch (Exception e) {
             return null;
         }

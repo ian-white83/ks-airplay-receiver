@@ -54,6 +54,21 @@ public final class ShizukuStarter {
      * @param connectMs how long to keep trying while adbd is not listening yet, as early in boot
      * @param approvalMs how long to wait for someone to approve this plugin's key on the screen
      */
+    /**
+     * Put adbd back to running as shell, so the network port no longer leads straight to root. Shizuku, once started,
+     * runs on its own as root. Returns adbd's answer.
+     */
+    public String unroot(int connectMs, int approvalMs, Progress progress) throws IOException {
+        step(progress, "Switching ADB back from root");
+        AdbClient c = connectRetry(connectMs, approvalMs, progress);
+        try {
+            if (!"0".equals(c.shell("id -u", 10000).trim())) return "already not root";
+            return c.unroot().trim();
+        } finally {
+            c.close();
+        }
+    }
+
     public String run(boolean skipStart, int connectMs, int approvalMs, final Progress progress) throws IOException {
         step(progress, "Connecting to ADB on port " + port);
         AdbClient c = connectRetry(connectMs, approvalMs, progress);

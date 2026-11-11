@@ -92,13 +92,15 @@ public final class PtpClock {
             throw e;
         }
         running = true;
-        peerExecutor = java.util.concurrent.Executors.newSingleThreadExecutor(new java.util.concurrent.ThreadFactory() {
+        // One thread, at most eight waiting jobs: anything past that is dropped, never queued without limit.
+        peerExecutor = new java.util.concurrent.ThreadPoolExecutor(1, 1, 0, java.util.concurrent.TimeUnit.MILLISECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<Runnable>(8), new java.util.concurrent.ThreadFactory() {
             @Override public Thread newThread(Runnable r) {
                 Thread t = new Thread(r, "ptp-peers");
                 t.setDaemon(true);
                 return t;
             }
-        });
+        }, new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         eventThread = loop(event, "ptp-event");
         generalThread = loop(general, "ptp-general");
     }
@@ -503,8 +505,19 @@ public final class PtpClock {
         return sb.length() == 0 ? "no clock yet" : sb.toString();
     }
 
+    /** Wake a newly found clock from the peers thread: the two Announces are 150 ms apart, too long for a receive thread. */
     private void sendWake(Clock c) {
-        if (c.address != null) sendWake(c.address, c.priority1, c.priority2);
+        final InetAddress a = c.address;
+        final int p1 = c.priority1, p2 = c.priority2;
+        java.util.concurrent.ExecutorService pe = peerExecutor;
+        if (a == null || pe == null) return;
+        try {
+            pe.execute(ks.airplay.Util.guard("ptp-wake", new Runnable() {
+                @Override public void run() { sendWake(a, p1, p2); }
+            }, new ks.airplay.Util.Logger() { @Override public void log(String m) { log.log(m); } }));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // queue full or stopping: the clock is woken by the next Announce
+        }
     }
 
     private void sendWake(InetAddress address, int priority1, int priority2) {

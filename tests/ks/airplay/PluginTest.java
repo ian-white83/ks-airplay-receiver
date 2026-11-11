@@ -198,6 +198,13 @@ public final class PluginTest {
         host.player.onActivate(picked);
         waitForInfo("Kitchen");
 
+        // With the boot start off, the Start button does nothing with ADB: it says to turn the boot start on.
+        Map<String, Object> startPress = new HashMap<>();
+        startPress.put("id", "startShizuku");
+        startPress.put("run", "start-off");
+        plugin.onEvent("settings.button", startPress);
+        waitFor(() -> host.results.stream().anyMatch(r -> r.startsWith("start-off:error:Turn on Start Shizuku as root at boot")), "Start refused while boot start is off");
+
         // Shizuku comes up as root: the button turns into Started, and back to Start when it goes away.
         Map<String, Object> root = new HashMap<>();
         root.put("available", true);

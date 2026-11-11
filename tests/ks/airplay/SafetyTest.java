@@ -17,6 +17,12 @@ public final class SafetyTest {
         samplesPerFrame();
         dacpReply();
         guard();
+        TestSupport.check(DacpRemote.statusLine(new java.io.ByteArrayInputStream("HTTP/1.1 204 No Content\r\n".getBytes("UTF-8"))).equals("HTTP/1.1 204 No Content"), "reads a status line");
+        try {
+            DacpRemote.statusLine(new java.io.ByteArrayInputStream(new byte[1_000_000]));
+            TestSupport.check(false, "an endless status line should fail");
+        } catch (IOException expected) {
+        }
         System.out.println("SafetyTest passed");
     }
 

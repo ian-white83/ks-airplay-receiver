@@ -138,6 +138,8 @@ final class RtspConnection implements Runnable {
         }
     }
 
+    boolean hasSession() { return session != null; }
+
     void stopSession() {
         BufferedSession s = session;
         session = null;
@@ -275,6 +277,8 @@ final class RtspConnection implements Runnable {
                     return;
                 }
                 stopSession();
+                // One buffered session at a time on the whole receiver: a newer SETUP ends any other.
+                server.endOtherSessions(this);
                 BufferedSession s = new BufferedSession(platform, server.audioEvents(this), server.clock(), shk, ct, spf);
                 s.setVolume(server.volumeDb());
                 s.setOffset(server.offsetNanos());

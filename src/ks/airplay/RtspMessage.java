@@ -13,7 +13,8 @@ import java.util.Map;
 /** One RTSP (or HTTP-style) request read from the AirPlay control connection, and the response written back. */
 public final class RtspMessage {
     static final int MAX_HEADER_BYTES = 16 * 1024;
-    static final int MAX_BODY_BYTES = 4 * 1024 * 1024; // cover art can be large
+    /** Cover art is the largest body a sender sends; Kiosk Satellite takes artwork up to 1 MiB. */
+    static final int MAX_BODY_BYTES = 1024 * 1024 + 64 * 1024;
 
     public final String method;
     public final String uri;
@@ -70,10 +71,12 @@ public final class RtspMessage {
                 throw new IOException("Bad Content-Length");
             }
             if (n < 0 || n > MAX_BODY_BYTES) throw new IOException("Body too large");
-            byte[] body = new byte[n];
+            // Grow the buffer as the body arrives, so a connection that only announces a large body holds nothing.
+            byte[] body = new byte[Math.min(n, 64 * 1024)];
             int off = 0;
             while (off < n) {
-                int r = in.read(body, off, n - off);
+                if (off == body.length) body = java.util.Arrays.copyOf(body, (int) Math.min(n, 2L * body.length));
+                int r = in.read(body, off, body.length - off);
                 if (r < 0) throw new EOFException("Connection closed in body");
                 off += r;
             }

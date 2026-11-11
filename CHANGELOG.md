@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+Final items from the Community Plugins review. **Needs Kiosk Satellite 2026.11.16 or later.**
+
+- Memory: the receiver holds at most 10 seconds of audio ahead, keeps one AirPlay session at a time (a new one replaces the older), and accepts request bodies up to about 1 MB, filled as they arrive. Before, a device on the network could make it hold over 100 MB.
+- The **Start** / **Started** button only shows, and only works, while **Start Shizuku as root at boot** is on, because turning that off is what removes the plugin's ADB key.
+- Once Shizuku runs as root, the plugin switches ADB back from root, so ADB on the network no longer leads straight to root. If that stops Shizuku on a device, the plugin starts it again, remembers, and leaves ADB as root there.
+- The ADB key moves into the plugin's own data folder, which Kiosk Satellite deletes when you uninstall the plugin.
+- The PTP port redirect is removed when the plugin stops, now that Kiosk Satellite keeps Shizuku open until then.
+- Smaller: waking a new PTP clock no longer pauses the receive thread, the PTP helper's queue is capped, and the remote control's answer is read with a length limit.
+
 ## 1.1.0
 
 - **Audio offset** is easier to set exactly: it now takes a typed value in steps of 0.01 s instead of a slider, and new **− 0.01 s** and **+ 0.01 s** buttons under it nudge it one step at a time while you listen. Each nudge applies and saves at once. Older Kiosk Satellite versions still show a slider, now in 0.01 s steps.

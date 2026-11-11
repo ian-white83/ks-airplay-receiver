@@ -206,6 +206,21 @@ public final class AirPlayServer {
         if (was) listener.onSessionEnded();
     }
 
+    /** Close the buffered sessions of every other connection, so only one holds audio buffers at a time. */
+    void endOtherSessions(RtspConnection keep) {
+        List<RtspConnection> others;
+        synchronized (this) {
+            others = new ArrayList<>(connections);
+        }
+        for (RtspConnection c : others) {
+            if (c != keep && c.hasSession()) {
+                platform.log("A newer AirPlay session replaces an older one");
+                c.stopSession();
+                sessionEnded(c);
+            }
+        }
+    }
+
     void connectionEnded(RtspConnection connection) {
         synchronized (this) { connections.remove(connection); }
         sessionEnded(connection);

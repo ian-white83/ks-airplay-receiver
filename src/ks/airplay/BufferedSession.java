@@ -38,7 +38,11 @@ public final class BufferedSession {
 
     static final int RATE = 44100;
     static final long NANOS = 1_000_000_000L;
-    private static final long MAX_QUEUED_NANOS = 60 * NANOS;
+    /**
+     * Most decoded audio held ahead of playback: 10 s, about 1.8 MB. Past it the plugin stops reading the stream and
+     * TCP holds the sender back. A session that never gets an anchor can't hold more than this either.
+     */
+    static final long MAX_QUEUED_NANOS = 10 * NANOS;
     private static final long RESYNC_NANOS = 20_000_000L;
     private static final long TRIM_NANOS = 1_000_000L;
     private static final long IDLE_NANOS = 2 * NANOS;
