@@ -169,6 +169,8 @@ Apart from the optional boot start above, nothing else runs as root. Kiosk Satel
 | Volume, track info, cover art and synced lyrics, through Kiosk Satellite's Now Playing | Password protection |
 | | Play, pause and skip from the kiosk: see [Playback controls](#playback-controls) |
 | | Choosing which speakers play from the kiosk: the iPhone or Mac picks the group |
+
+**There's no password.** Anyone on your network can see the kiosk in their AirPlay menu and play to it, as with most AirPlay speakers. Keep it on a network you trust, or switch to another player under **Settings > Media Player > Player** when you don't want it reachable.
 | | Adding the kiosk to the Apple Home app has not been tested and may not work |
 
 Sync accuracy is a few milliseconds. PTP packets get their timestamps in Java rather than in the kernel. That's fine between rooms; in the same room you may hear a slight difference against a HomePod.
